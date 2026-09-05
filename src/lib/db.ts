@@ -1,0 +1,175 @@
+"use client";
+
+import type { User } from "firebase/auth";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  setDoc,
+  updateDoc,
+  writeBatch,
+  where,
+} from "firebase/firestore";
+import { firestore } from "./firebase";
+import type { DrivePrivate, PlanDoc, SessionDoc, SkillState, UserProfile, VeroAnalysis } from "./types";
+import { localDateStr } from "./format";
+import { applySkillXP, nextStreak, sessionXP } from "./xp";
+import { SKILL_MAP } from "@/content/skills";
+
+export const ROOT = "verveUsers";
+export const userDocPath = (uid: string) => `${ROOT}/${uid}`;
+
+export async function ensureProfile(user: User): Promise<UserProfile> {
+  const ref = doc(firestore(), userDocPath(user.uid));
+  const snap = await getDoc(ref);
+  if (snap.exists()) {
+    const p = snap.data() as UserProfile;
+    // Keep basic identity fresh
+    const patch: Partial<UserProfile> = {};
+    if (user.displayName && user.displayName !== p.displayName) patch.displayName = user.displayName;
+    if (user.photoURL && user.photoURL !== p.photoURL) patch.photoURL = user.photoURL;
+    if (Object.keys(patch).length) await updateDoc(ref, patch);
+    return { ...p, ...patch };
+  }
+  const profile: UserProfile = {
+    uid: user.uid,
+    displayName: user.displayName ?? user.email?.split("@")[0] ?? "You",
+    email: user.email ?? "",
+    photoURL: user.photoURL ?? undefined,
+    onboarded: false,
+    createdAt: Date.now(),
+    streak: { count: 0, lastDate: null, best: 0 },
+    xp: 0,
+    totalSessions: 0,
+    sessionMinutes: 10,
+  };
+  await setDoc(ref, stripUndefined(profile));
+  return profile;
+}
+
+export async function updateProfile(uid: string, patch: Partial<UserProfile>) {
+  await updateDoc(doc(firestore(), userDocPath(uid)), stripUndefined(patch));
+}
+
+// ---------------- Drive private ----------------
+export async function saveDriveToken(uid: string, data: DrivePrivate) {
+  await setDoc(doc(firestore(), `${userDocPath(uid)}/private/drive`), stripUndefined(data));
+  await updateDoc(doc(firestore(), userDocPath(uid)), { driveConnected: true, driveEmail: data.email ?? "" });
+}
+
+export async function getDriveToken(uid: string): Promise<DrivePrivate | null> {
+  const snap = await getDoc(doc(firestore(), `${userDocPath(uid)}/private/drive`));
+  return snap.exists() ? (snap.data() as DrivePrivate) : null;
+}
+
+// ---------------- Sessions ----------------
+export function newSessionId() {
+  return doc(collection(firestore(), `${ROOT}/x/sessions`)).id;
+}
+
+export async function saveSession(uid: string, session: SessionDoc) {
+  await setDoc(doc(firestore(), `${userDocPath(uid)}/sessions/${session.id}`), stripUndefined(session), { merge: true });
+}
+
+export async function patchSession(uid: string, id: string, patch: Partial<SessionDoc>) {
+  await setDoc(doc(firestore(), `${userDocPath(uid)}/sessions/${id}`), stripUndefined(patch), { merge: true });
+}
+
+export async function getSession(uid: string, id: string): Promise<SessionDoc | null> {
+  const snap = await getDoc(doc(firestore(), `${userDocPath(uid)}/sessions/${id}`));
+  return snap.exists() ? (snap.data() as SessionDoc) : null;
+}
+
+export async function listSessions(uid: string, n = 60): Promise<SessionDoc[]> {
+  const q = query(collection(firestore(), `${userDocPath(uid)}/sessions`), orderBy("createdAt", "desc"), limit(n));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data() as SessionDoc);
+}
+
+export async function listAnalyzedSessions(uid: string, n = 60): Promise<SessionDoc[]> {
+  const q = query(
+    collection(firestore(), `${userDocPath(uid)}/sessions`),
+    where("status", "==", "analyzed"),
+    orderBy("createdAt", "desc"),
+    limit(n),
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data() as SessionDoc);
+}
+
+// ---------------- Skills ----------------
+export async function getSkillStates(uid: string): Promise<Record<string, SkillState>> {
+  const snap = await getDocs(collection(firestore(), `${userDocPath(uid)}/skills`));
+  const out: Record<string, SkillState> = {};
+  snap.docs.forEach((d) => (out[d.id] = d.data() as SkillState));
+  return out;
+}
+
+// ---------------- Plans ----------------
+export async function getPlan(uid: string, date = localDateStr()): Promise<PlanDoc | null> {
+  const snap = await getDoc(doc(firestore(), `${userDocPath(uid)}/plans/${date}`));
+  return snap.exists() ? (snap.data() as PlanDoc) : null;
+}
+
+export async function savePlan(uid: string, plan: PlanDoc) {
+  await setDoc(doc(firestore(), `${userDocPath(uid)}/plans/${plan.date}`), stripUndefined(plan), { merge: true });
+}
+
+/**
+ * Called once a session is analyzed. Awards XP, levels skills, bumps streak,
+ * updates focus, marks the plan complete. One atomic batch.
+ */
+export async function commitSessionResults(opts: {
+  profile: UserProfile;
+  session: SessionDoc;
+  analysis: VeroAnalysis;
+  skills: Record<string, SkillState>;
+  isNewDrill: boolean;
+}): Promise<{ xp: number; skillUpdates: Record<string, SkillState>; profile: UserProfile }> {
+  const { profile, session, analysis, skills, isNewDrill } = opts;
+  const db = firestore();
+  const batch = writeBatch(db);
+  const xp = sessionXP(analysis, isNewDrill, Boolean(session.warmupId));
+  const today = localDateStr();
+  const streak = nextStreak(profile.streak, today);
+  const skillUpdates = applySkillXP(skills, session.skillIds, analysis.scores.overall, Date.now());
+  for (const [id, st] of Object.entries(skillUpdates)) {
+    batch.set(doc(db, `${userDocPath(profile.uid)}/skills/${id}`), st, { merge: true });
+  }
+  const nextFocus = SKILL_MAP[analysis.nextFocusSkillId] ? analysis.nextFocusSkillId : profile.focusSkillId;
+  const profilePatch: Partial<UserProfile> = {
+    xp: (profile.xp ?? 0) + xp,
+    totalSessions: (profile.totalSessions ?? 0) + 1,
+    streak,
+    focusSkillId: nextFocus,
+  };
+  if (session.kind === "baseline") {
+    profilePatch.baselineSessionId = session.id;
+    profilePatch.onboarded = true;
+  }
+  batch.update(doc(db, userDocPath(profile.uid)), stripUndefined(profilePatch));
+  batch.set(
+    doc(db, `${userDocPath(profile.uid)}/sessions/${session.id}`),
+    stripUndefined({ ai: analysis, status: "analyzed", xp, isNewDrill }),
+    { merge: true },
+  );
+  if (session.kind === "daily") {
+    batch.set(doc(db, `${userDocPath(profile.uid)}/plans/${session.date}`), { completed: true, sessionId: session.id }, { merge: true });
+  }
+  await batch.commit();
+  return { xp, skillUpdates, profile: { ...profile, ...profilePatch } as UserProfile };
+}
+
+export function stripUndefined<T extends object>(obj: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined) continue;
+    if (v && typeof v === "object" && !Array.isArray(v)) out[k] = stripUndefined(v as object);
+    else out[k] = v;
+  }
+  return out as T;
+}
