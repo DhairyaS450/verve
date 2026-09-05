@@ -1,5 +1,28 @@
 # One-time setup
 
+## Status of the live deployment (verve-ebon.vercel.app, Firebase project `formflux-app`)
+
+| Step | State |
+|---|---|
+| Google sign-in provider enabled in Firebase Auth | done |
+| OAuth client redirect URIs + JS origins (localhost:3000, verve-ebon.vercel.app) | done |
+| Google Drive API enabled | done |
+| Firestore rules: `verveUsers/{uid}` owner-only block published (FormFlux rules untouched) | done |
+| Vercel env: Firebase config, Gemini key/model, `TOKEN_ENC_KEY`, `NEXT_PUBLIC_APP_URL`, `GOOGLE_CLIENT_ID` | done |
+| **`GOOGLE_CLIENT_SECRET` on Vercel (and in `.env.local` for local dev)** | **you** |
+
+The secret is the "Web client secret" under Firebase → Authentication → Sign-in method → Google → Web SDK configuration (or a new one from Google Cloud → Auth Platform → Clients → "Web client" → Add secret). Then:
+
+```bash
+vercel env add GOOGLE_CLIENT_SECRET production
+```
+
+```bash
+vercel deploy --prod --yes
+```
+
+---
+
 Verve needs one Google Cloud project (the Firebase project) with four things switched on.
 
 ## 1. Firebase Authentication → Google
