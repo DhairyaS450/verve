@@ -24,6 +24,8 @@ export interface UserProfile {
   sessionMinutes: 5 | 10 | 15;
   /** Set once the baseline session is analyzed */
   baselineSessionId?: string;
+  /** Display only; the key itself lives encrypted in private/gemini */
+  geminiKeyLast4?: string;
 }
 
 export interface AudioMetrics {
@@ -145,4 +147,11 @@ export interface DrivePrivate {
   encRefreshToken: string;
   email?: string;
   connectedAt: number;
+}
+
+/** A user's own Gemini key, encrypted server-side. Only its ciphertext ever touches Firestore. */
+export interface GeminiPrivate {
+  encKey: string;
+  last4: string;
+  addedAt: number;
 }

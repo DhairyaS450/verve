@@ -4,11 +4,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import clsx from "clsx";
-import { Activity, GitBranch, Play, Settings } from "lucide-react";
+import { Activity, GitBranch, Play } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { VeroMark } from "./VeroMark";
-import { liveStreak, userLevel } from "@/lib/xp";
-import { localDateStr } from "@/lib/format";
+import { AppHeader } from "./AppHeader";
+import { userLevel } from "@/lib/xp";
 
 const NAV = [
   { href: "/today", label: "Today", icon: Play },
@@ -44,7 +44,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const streak = liveStreak(profile.streak, localDateStr());
   const lvl = userLevel(profile.xp ?? 0);
 
   return (
@@ -72,27 +71,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
-          <div className="mt-auto space-y-4">
-            <div className="hairline pt-4">
-              <div className="label">Streak</div>
-              <div className="metric text-[40px] mt-1">{streak}</div>
+          <div className="mt-auto hairline pt-4">
+            <div className="label">Level {lvl.level}</div>
+            <div className="font-display text-[20px] mt-1">{lvl.name}</div>
+            <div className="h-[3px] bg-paper-3 mt-2">
+              <div className="h-full bg-ink" style={{ width: `${Math.round(lvl.progress * 100)}%` }} />
             </div>
-            <div>
-              <div className="label">Level {lvl.level}</div>
-              <div className="font-display text-[18px] mt-1">{lvl.name}</div>
-              <div className="h-[3px] bg-paper-3 mt-2">
-                <div className="h-full bg-ink" style={{ width: `${Math.round(lvl.progress * 100)}%` }} />
-              </div>
-            </div>
-            <Link href="/settings" className="flex items-center gap-2 text-[13px] text-ink-2 hover:text-ink">
-              <Settings size={14} strokeWidth={1.75} /> Settings
-            </Link>
+            <div className="text-[11px] text-ink-3 num mt-1">{lvl.nextXp ? `${profile.xp} / ${lvl.nextXp} xp` : `${profile.xp} xp`}</div>
           </div>
         </aside>
       )}
 
       <div className={clsx("min-h-dvh flex flex-col", !focusMode && "pb-[76px] md:pb-0")}>
-        <main className="flex-1 w-full mx-auto max-w-[1080px] px-5 md:px-12 pt-5 md:pt-10 safe-t">{children}</main>
+        <main className={clsx("flex-1 w-full mx-auto max-w-[1080px] px-5 md:px-12 safe-t", focusMode ? "pt-5 md:pt-10" : "pt-0 md:pt-2")}>
+          {!focusMode && <AppHeader />}
+          {children}
+        </main>
       </div>
 
       {/* Mobile bottom nav */}

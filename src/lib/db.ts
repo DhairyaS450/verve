@@ -3,6 +3,8 @@
 import type { User } from "firebase/auth";
 import {
   collection,
+  deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -15,7 +17,7 @@ import {
   where,
 } from "firebase/firestore";
 import { firestore } from "./firebase";
-import type { DrivePrivate, PlanDoc, SessionDoc, SkillState, UserProfile, VeroAnalysis } from "./types";
+import type { DrivePrivate, GeminiPrivate, PlanDoc, SessionDoc, SkillState, UserProfile, VeroAnalysis } from "./types";
 import { localDateStr } from "./format";
 import { applySkillXP, nextStreak, sessionXP } from "./xp";
 import { SKILL_MAP } from "@/content/skills";
@@ -64,6 +66,37 @@ export async function saveDriveToken(uid: string, data: DrivePrivate) {
 export async function getDriveToken(uid: string): Promise<DrivePrivate | null> {
   const snap = await getDoc(doc(firestore(), `${userDocPath(uid)}/private/drive`));
   return snap.exists() ? (snap.data() as DrivePrivate) : null;
+}
+
+// ---------------- Gemini key (bring your own) ----------------
+export async function saveGeminiKey(uid: string, data: GeminiPrivate) {
+  await setDoc(doc(firestore(), `${userDocPath(uid)}/private/gemini`), stripUndefined(data));
+  await updateDoc(doc(firestore(), userDocPath(uid)), { geminiKeyLast4: data.last4 });
+}
+
+export async function getGeminiKey(uid: string): Promise<GeminiPrivate | null> {
+  const snap = await getDoc(doc(firestore(), `${userDocPath(uid)}/private/gemini`));
+  return snap.exists() ? (snap.data() as GeminiPrivate) : null;
+}
+
+export async function deleteGeminiKey(uid: string) {
+  await deleteDoc(doc(firestore(), `${userDocPath(uid)}/private/gemini`));
+  await updateDoc(doc(firestore(), userDocPath(uid)), { geminiKeyLast4: deleteField() });
+}
+
+/** Wipes every Verve document for this user. Drive files are left untouched. */
+export async function deleteAllUserData(uid: string) {
+  const db = firestore();
+  for (const sub of ["sessions", "skills", "plans", "private"]) {
+    const snap = await getDocs(collection(db, `${userDocPath(uid)}/${sub}`));
+    const docs = snap.docs;
+    for (let i = 0; i < docs.length; i += 400) {
+      const batch = writeBatch(db);
+      docs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    }
+  }
+  await deleteDoc(doc(db, userDocPath(uid)));
 }
 
 // ---------------- Sessions ----------------

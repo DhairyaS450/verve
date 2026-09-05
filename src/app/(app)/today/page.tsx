@@ -9,6 +9,7 @@ import type { PlanDoc, SessionDoc, SkillState } from "@/lib/types";
 import { DRILL_MAP } from "@/content/drills";
 import { SKILL_MAP } from "@/content/skills";
 import { VeroLine } from "@/components/VeroMark";
+import { Vero } from "@/components/Vero";
 import { Metric } from "@/components/Metrics";
 import { fmt1, localDateStr, relativeDay } from "@/lib/format";
 import { liveStreak } from "@/lib/xp";
@@ -67,14 +68,9 @@ export default function TodayPage() {
   return (
     <div className="pb-12 md:grid md:grid-cols-[1fr_300px] md:gap-16">
       <div>
-        <div className="flex items-baseline justify-between">
-          <p className="label">
-            Today <span className="text-ink-3">· {relativeDay(localDateStr()).replace("Today", new Date().toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }))}</span>
-          </p>
-          <p className="label">
-            <span className="num text-ink">{streak}</span> day streak
-          </p>
-        </div>
+        <p className="label">
+          Today <span className="text-ink-3">· {relativeDay(localDateStr()).replace("Today", new Date().toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }))}</span>
+        </p>
 
         {!done ? (
           <>
@@ -117,7 +113,8 @@ export default function TodayPage() {
           </>
         ) : (
           <>
-            <p className="mt-8 md:mt-14 text-[13px] text-good font-semibold tracking-[0.1em] uppercase">Done for today</p>
+            <Vero pose="perched" size={120} className="mt-6 -mb-4 rise" />
+            <p className="mt-8 md:mt-10 text-[13px] text-good font-semibold tracking-[0.1em] uppercase">Done for today</p>
             <h1 className="font-display font-medium text-[44px] md:text-[72px] leading-[0.96] tracking-[-0.04em] mt-2 rise">{VERO.streak(streak)}</h1>
             {last?.ai && (
               <VeroLine className="mt-5 rise-1" muted>

@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import clsx from "clsx";
 import { X } from "lucide-react";
@@ -19,6 +20,9 @@ import { FRAMEWORK_MAP } from "@/content/frameworks";
 import type { Drill } from "@/content/types";
 import { VERO, pick } from "@/content/vero";
 import { VeroLine, VeroMark } from "@/components/VeroMark";
+import { Vero } from "@/components/Vero";
+import { Confetti } from "@/components/Confetti";
+import { getGeminiKeyStatus } from "@/lib/keys";
 import { Timer } from "@/components/Timer";
 import { Waveform } from "@/components/Waveform";
 import { CameraStage } from "@/components/CameraStage";
@@ -60,6 +64,7 @@ function PracticeFlow() {
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   const [drive, setDrive] = useState<"checking" | "ready" | "missing" | "error">("checking");
+  const [gemini, setGemini] = useState<"checking" | "ready" | "missing">("checking");
   const [elapsed, setElapsed] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [recording, setRecording] = useState(false);
@@ -135,6 +140,18 @@ function PracticeFlow() {
         setDrive(e instanceof DriveNotConnected ? "missing" : "error");
       }
     })();
+    return () => {
+      alive = false;
+    };
+  }, [profile, phase]);
+
+  // Gemini key check: own key, or the shared key if this account is allowed to use it.
+  useEffect(() => {
+    if (!profile || phase !== "setup") return;
+    let alive = true;
+    getGeminiKeyStatus(profile.uid)
+      .then((s) => alive && setGemini(s.hasOwnKey || s.sharedAllowed ? "ready" : "missing"))
+      .catch(() => alive && setGemini("ready"));
     return () => {
       alive = false;
     };
@@ -437,10 +454,16 @@ function PracticeFlow() {
               Connect Google Drive first
             </a>
           )}
-          <button type="button" className="btn-accent btn-block min-h-[64px] text-[16px]" onClick={begin} disabled={drive === "missing"}>
+          {gemini === "missing" && (
+            <Link href="/settings#gemini" className="btn-ghost btn-block">
+              Add your Gemini API key first
+            </Link>
+          )}
+          <button type="button" className="btn-accent btn-block min-h-[64px] text-[16px]" onClick={begin} disabled={drive === "missing" || gemini === "missing"}>
             Begin · {total} min
           </button>
           <p className="text-[12px] text-ink-3">
+            {gemini === "missing" && "Vero reviews tapes with Gemini. Add your own key in Settings, then come back. "}
             {drive === "checking" && "Checking your Drive…"}
             {drive === "ready" && "Camera and mic will be requested once. Recordings save to your Drive."}
             {drive === "error" && "Drive check failed. You can still practice; upload may fail."}
@@ -625,6 +648,10 @@ function PracticeFlow() {
                   <a href={`/api/auth/google?next=${encodeURIComponent("/today")}`} className="btn btn-block">
                     Reconnect Google Drive
                   </a>
+                ) : error?.includes("Gemini") ? (
+                  <Link href="/settings#gemini" className="btn btn-block">
+                    Open Settings
+                  </Link>
                 ) : (
                   <button type="button" className="btn btn-block" onClick={retry}>
                     Retry
@@ -637,9 +664,9 @@ function PracticeFlow() {
             </>
           ) : (
             <>
-              <div className="flex items-center gap-3">
-                <VeroMark size={26} className="blink" />
-                <p className="font-display text-[22px] leading-tight">{stage === "uploading" ? pick(VERO.uploading) : veroLine}</p>
+              <div className="flex items-center gap-5">
+                <Vero pose="notes" size={112} className="shrink-0 -ml-2" />
+                <p className="font-display text-[22px] md:text-[26px] leading-tight">{stage === "uploading" ? pick(VERO.uploading) : veroLine}</p>
               </div>
               <div className="mt-4 h-[2px] bg-paper-3">
                 <div className={clsx("h-full transition-[width] duration-300", stage === "uploading" ? "bg-ink" : "bg-accent")} style={{ width: stage === "uploading" ? `${Math.round(uploadPct * 100)}%` : "100%" }} />
@@ -671,11 +698,22 @@ function PracticeFlow() {
 
   // ---------------------------------------------------------------- FEEDBACK
   if (phase === "feedback" && session?.ai) {
+    const prevAi = previous?.ai;
+    const improved = !prevAi || session.ai.scores.overall >= prevAi.scores.overall || session.ai.fillers.perMin < prevAi.fillers.perMin;
+    const celebrate = kind === "baseline" || improved;
     return (
       <div className="max-w-[720px] pb-16">
+        <Confetti fire={celebrate} />
         {header("Vero's verdict")}
         {stepBar(warmup ? 2 : 1)}
-        <FeedbackView session={session} previous={previous} xpEarned={result?.xp} streak={result?.streak} className="mt-8" />
+        <div className="mt-6 grid grid-cols-[112px_1fr] md:grid-cols-[150px_1fr] gap-4 md:gap-6 items-center rise">
+          <Vero pose={celebrate ? "cheer" : "perched"} size={150} className="w-[112px] h-[112px] md:w-[150px] md:h-[150px]" />
+          <div>
+            <p className="label">{kind === "baseline" ? "Baseline set" : celebrate ? "Session complete" : "Logged"}</p>
+            <p className="font-display text-[22px] md:text-[28px] leading-tight tracking-[-0.02em] mt-2">{session.ai.oneLiner}</p>
+          </div>
+        </div>
+        <FeedbackView session={session} previous={previous} xpEarned={result?.xp} streak={result?.streak} hideLine className="mt-8" />
         <div className="mt-10 flex flex-col gap-3">
           <button type="button" className="btn-accent btn-block min-h-[60px]" onClick={finish}>
             {kind === "baseline" ? "Start training" : "Done"}

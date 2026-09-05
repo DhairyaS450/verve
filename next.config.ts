@@ -19,6 +19,17 @@ const nextConfig: NextConfig = {
     // Keep server bundles lean; these are only used in route handlers.
   },
   serverExternalPackages: ["@google/genai"],
+  async headers() {
+    return [
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+          { key: "Service-Worker-Allowed", value: "/" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

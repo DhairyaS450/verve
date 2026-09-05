@@ -9,7 +9,8 @@
 | Google Drive API enabled | done |
 | Firestore rules: `verveUsers/{uid}` owner-only block published (FormFlux rules untouched) | done |
 | Vercel env: Firebase config, Gemini key/model, `TOKEN_ENC_KEY`, `NEXT_PUBLIC_APP_URL`, `GOOGLE_CLIENT_ID` | done |
-| **`GOOGLE_CLIENT_SECRET` on Vercel (and in `.env.local` for local dev)** | **you** |
+| `GOOGLE_CLIENT_SECRET` on Vercel | done |
+| `GEMINI_OWNER_EMAILS` on Vercel (only the owner uses the shared Gemini key; everyone else brings their own) | done |
 
 The secret is the "Web client secret" under Firebase → Authentication → Sign-in method → Google → Web SDK configuration (or a new one from Google Cloud → Auth Platform → Clients → "Web client" → Add secret). Then:
 
@@ -65,6 +66,11 @@ GOOGLE_CLIENT_ID=          # step 1
 GOOGLE_CLIENT_SECRET=      # step 1
 TOKEN_ENC_KEY=             # 32 random bytes, base64:  node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 NEXT_PUBLIC_APP_URL=       # https://<your-vercel-domain>
+GEMINI_OWNER_EMAILS=       # comma-separated accounts allowed to use GEMINI_API_KEY; others bring their own key
 ```
+
+## Sharing Verve with other people
+
+Set `GEMINI_OWNER_EMAILS` to your own Google account. Anyone else who signs in is asked, before their first recording, to paste their own Gemini API key in Settings → Vero's brain. The key is validated against Google once, encrypted with AES-256-GCM using `TOKEN_ENC_KEY`, and stored under their own `verveUsers/{uid}/private/gemini` document, which only they can read. Every analysis they run is billed to their key, never yours.
 
 On Vercel, add the same variables under Project → Settings → Environment Variables (or `vercel env add`).

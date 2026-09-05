@@ -12,6 +12,7 @@ import { Metric } from "@/components/Metrics";
 import { fmt1, localDateStr, shortDate } from "@/lib/format";
 import { liveStreak, userLevel } from "@/lib/xp";
 import { VERO } from "@/content/vero";
+import { Vero } from "@/components/Vero";
 
 type MetricKey = "fillers" | "wpm" | "variety" | "overall";
 const TABS: { key: MetricKey; label: string; unit?: string; band?: [number, number]; lower?: boolean; max?: number }[] = [
@@ -80,8 +81,13 @@ export default function ProgressPage() {
           </div>
           {ready && points.length > 0 ? (
             <TrendChart points={points} band={t.band} lowerIsBetter={t.lower} unit={t.unit} max={t.max} className="mt-4" />
+          ) : ready ? (
+            <div className="mt-6 flex items-end gap-4">
+              <Vero pose="perched" size={110} />
+              <p className="text-[14px] text-ink-3 pb-2">{VERO.empty}</p>
+            </div>
           ) : (
-            <p className="mt-6 text-[14px] text-ink-3">{ready ? VERO.empty : "Loading"}</p>
+            <p className="mt-6 text-[14px] text-ink-3">Loading</p>
           )}
         </div>
         <div className="mt-8 md:mt-0">

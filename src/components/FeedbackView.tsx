@@ -16,6 +16,7 @@ export function FeedbackView({
   streak,
   nextDrillName,
   showTapeLink,
+  hideLine,
   className,
 }: {
   session: SessionDoc;
@@ -24,6 +25,7 @@ export function FeedbackView({
   streak?: number;
   nextDrillName?: string;
   showTapeLink?: boolean;
+  hideLine?: boolean;
   className?: string;
 }) {
   const ai = session.ai;
@@ -38,7 +40,7 @@ export function FeedbackView({
 
   return (
     <div className={clsx("space-y-10", className)}>
-      <VeroLine className="rise">{ai.oneLiner}</VeroLine>
+      {!hideLine && <VeroLine className="rise">{ai.oneLiner}</VeroLine>}
 
       {/* Three numbers */}
       <div className="grid grid-cols-3 gap-4 hairline-strong pt-5 rise-1">

@@ -4,8 +4,13 @@ import { firebaseProjectId } from "./env";
 
 const JWKS = createRemoteJWKSet(new URL("https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"));
 
-/** Verifies a Firebase ID token without the Admin SDK. Returns uid. */
-export async function verifyFirebaseIdToken(req: Request): Promise<string> {
+export interface VerifiedUser {
+  uid: string;
+  email?: string;
+}
+
+/** Verifies a Firebase ID token without the Admin SDK. */
+export async function verifyFirebaseIdToken(req: Request): Promise<VerifiedUser> {
   const auth = req.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   if (!token) throw new Error("unauthorized");
@@ -16,5 +21,5 @@ export async function verifyFirebaseIdToken(req: Request): Promise<string> {
   });
   const uid = (payload.sub as string) ?? (payload.user_id as string);
   if (!uid) throw new Error("unauthorized");
-  return uid;
+  return { uid, email: typeof payload.email === "string" ? payload.email : undefined };
 }

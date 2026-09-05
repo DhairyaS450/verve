@@ -4,6 +4,7 @@ import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { VeroMark } from "@/components/VeroMark";
+import { Vero } from "@/components/Vero";
 
 const ERRORS: Record<string, string> = {
   access_denied: "Sign-in was cancelled.",
@@ -30,7 +31,8 @@ function Welcome() {
         <div className="font-display text-[22px] font-semibold tracking-[-0.03em] flex items-center gap-2">
           <VeroMark size={22} /> VERVE
         </div>
-        <div className="mt-16 md:mt-auto">
+        <Vero pose="welcome" size={132} className="mt-10 md:hidden" />
+        <div className="mt-8 md:mt-auto">
           <p className="label">Daily communication training</p>
           <h1 className="font-display font-medium text-[44px] md:text-[80px] leading-[0.98] tracking-[-0.04em] mt-4">
             Fifteen minutes.
@@ -50,18 +52,21 @@ function Welcome() {
         </div>
       </section>
       <section className="hidden md:flex bg-ink text-paper flex-col justify-between p-16">
-        <div className="grid grid-cols-3 gap-6">
-          <div>
-            <div className="metric text-[64px]">1</div>
-            <div className="label text-paper/60 mt-2">Filler per minute is elite</div>
-          </div>
-          <div>
-            <div className="metric text-[64px]">140</div>
-            <div className="label text-paper/60 mt-2">Words per minute, the zone</div>
-          </div>
-          <div>
-            <div className="metric text-[64px]">2s</div>
-            <div className="label text-paper/60 mt-2">Pause that reads as authority</div>
+        <div className="flex items-start justify-between gap-10">
+          <Vero pose="welcome" size={190} className="text-paper shrink-0" cut="var(--ink)" />
+          <div className="grid grid-cols-3 gap-6 flex-1">
+            <div>
+              <div className="metric text-[56px]">1</div>
+              <div className="label text-paper/60 mt-2">Filler per minute is elite</div>
+            </div>
+            <div>
+              <div className="metric text-[56px]">140</div>
+              <div className="label text-paper/60 mt-2">Words per minute, the zone</div>
+            </div>
+            <div>
+              <div className="metric text-[56px]">2s</div>
+              <div className="label text-paper/60 mt-2">Pause that reads as authority</div>
+            </div>
           </div>
         </div>
         <ol className="space-y-5">

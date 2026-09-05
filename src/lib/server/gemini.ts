@@ -175,8 +175,8 @@ async function waitForActive(ai: GoogleGenAI, name: string, timeoutMs = 150_000)
   }
 }
 
-export async function analyzeMedia(bytes: Buffer | Uint8Array, mimeType: string, ctx: AnalyzeContext): Promise<VeroAnalysis> {
-  const ai = new GoogleGenAI({ apiKey: env("GEMINI_API_KEY") });
+export async function analyzeMedia(bytes: Buffer | Uint8Array, mimeType: string, ctx: AnalyzeContext, apiKey?: string): Promise<VeroAnalysis> {
+  const ai = new GoogleGenAI({ apiKey: apiKey ?? env("GEMINI_API_KEY") });
   const primary = optionalEnv("GEMINI_MODEL") ?? "gemini-3.8-flash";
   const fallback = "gemini-2.5-flash";
 

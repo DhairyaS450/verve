@@ -13,6 +13,9 @@ import { FRAMEWORK_MAP } from "@/content/frameworks";
 import { VeroLine } from "@/components/VeroMark";
 import { Transcript } from "@/components/Transcript";
 import { SessionList } from "@/components/SessionList";
+import { Vero } from "@/components/Vero";
+import { Flame } from "@/components/Flame";
+import { Confetti } from "@/components/Confetti";
 
 const MOCK_AI: NonNullable<SessionDoc["ai"]> = {
   transcript: "So, um, traffic cones are, like, one of those things you never think about. Um, first, they mark danger. Second, they, uh, guide traffic. And third, you know, they're just orange. The reason I'm telling you this is...",
@@ -59,8 +62,9 @@ const MOCK_SKILLS: Record<string, SkillState> = {
 
 export default function Preview() {
   if (process.env.NODE_ENV === "production") notFound();
-  const [tab, setTab] = useState("feedback");
-  const tabs = ["feedback", "record", "progress", "skills", "wheel"];
+  const [tab, setTab] = useState("vero");
+  const [boom, setBoom] = useState(0);
+  const tabs = ["vero", "feedback", "record", "progress", "skills", "wheel"];
   return (
     <div className="max-w-[720px] mx-auto px-5 py-8">
       <div className="flex gap-4 mb-8">
@@ -70,6 +74,34 @@ export default function Preview() {
           </button>
         ))}
       </div>
+      {tab === "vero" && (
+        <div className="space-y-10">
+          <div className="flex items-center justify-between h-[60px] border-b border-line">
+            <span className="font-display text-[20px] font-semibold tracking-[-0.03em]">VERVE</span>
+            <div className="flex items-center gap-4">
+              <span className="flex items-center gap-1.5"><Flame size={24} state="cold" /><span className="num font-display text-[21px]">0</span></span>
+              <span className="flex items-center gap-1.5"><Flame size={24} state="lit" /><span className="num font-display text-[21px]">4</span></span>
+              <span className="flex items-center gap-1.5"><Flame size={24} state="hot" /><span className="num font-display text-[21px]">12</span></span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            {(["perched", "welcome", "cheer", "notes"] as const).map((p) => (
+              <div key={p} className="flex flex-col items-center gap-2">
+                <Vero pose={p} size={150} />
+                <span className="label">{p}</span>
+              </div>
+            ))}
+          </div>
+          <div className="bg-ink p-6 flex items-center gap-6">
+            <Vero pose="welcome" size={120} className="text-paper" cut="var(--ink)" />
+            <Vero pose="cheer" size={120} className="text-paper" cut="var(--ink)" />
+          </div>
+          <button type="button" className="btn" onClick={() => setBoom((b) => b + 1)}>
+            Fire confetti
+          </button>
+          <Confetti key={boom} fire={boom > 0} />
+        </div>
+      )}
       {tab === "feedback" && <FeedbackView session={MOCK_SESSION} previous={MOCK_PREV} xpEarned={84} streak={4} nextDrillName="One breath, one sentence" showTapeLink />}
       {tab === "record" && (
         <div className="-mx-5">

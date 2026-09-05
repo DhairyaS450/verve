@@ -1,7 +1,7 @@
 "use client";
 
 import { firebaseAuth } from "./firebase";
-import { commitSessionResults, patchSession } from "./db";
+import { commitSessionResults, getGeminiKey, patchSession } from "./db";
 import { ensureFolder, getAccessToken, uploadResumable } from "./drive";
 import { fileExtension } from "./recorder";
 import type { AudioMetrics, SessionDoc, SkillState, UserProfile, VeroAnalysis } from "./types";
@@ -39,7 +39,7 @@ export async function analyzeSession(opts: {
   if (!user) throw new Error("not signed in");
   const previous = sessions.find((s) => s.id !== session.id && s.status === "analyzed" && s.ai);
   await patchSession(profile.uid, session.id, { status: "analyzing" });
-  const token = await getAccessToken(profile.uid);
+  const [token, ownKey] = await Promise.all([getAccessToken(profile.uid), getGeminiKey(profile.uid).catch(() => null)]);
   const res = await fetch("/api/analyze", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${await user.getIdToken()}` },
@@ -47,6 +47,7 @@ export async function analyzeSession(opts: {
       accessToken: token,
       fileId: session.recording.driveFileId,
       mimeType: session.recording.mimeType,
+      encGeminiKey: ownKey?.encKey,
       context: {
         drillId: session.drillId,
         kind: session.kind,
@@ -72,7 +73,9 @@ export async function analyzeSession(opts: {
     let msg = `analysis failed (${res.status})`;
     try {
       const j = await res.json();
-      if (j?.message) msg = j.message;
+      if (j?.error === "key_required") msg = "Vero needs a Gemini API key. Add yours in Settings.";
+      else if (j?.error === "key_invalid") msg = "Your Gemini API key was rejected. Update it in Settings.";
+      else if (j?.message) msg = j.message;
       else if (j?.error) msg = j.error;
     } catch {}
     await patchSession(profile.uid, session.id, { status: "failed", error: msg });
