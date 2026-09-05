@@ -52,9 +52,9 @@ function Welcome() {
         </div>
       </section>
       <section className="hidden md:flex bg-ink text-paper flex-col justify-between p-16">
-        <div className="flex items-start justify-between gap-10">
-          <Vero pose="welcome" size={190} className="text-paper shrink-0" cut="var(--ink)" />
-          <div className="grid grid-cols-3 gap-6 flex-1">
+        <div className="space-y-12">
+          <Vero pose="welcome" size={190} className="text-paper" cut="var(--ink)" />
+          <div className="grid grid-cols-3 gap-6">
             <div>
               <div className="metric text-[56px]">1</div>
               <div className="label text-paper/60 mt-2">Filler per minute is elite</div>
