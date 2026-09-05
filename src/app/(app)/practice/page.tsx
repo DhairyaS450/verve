@@ -48,6 +48,7 @@ function PracticeFlow() {
   const [sessions, setSessions] = useState<SessionDoc[]>([]);
   const [skills, setSkills] = useState<Record<string, SkillState>>({});
   const [material, setMaterial] = useState<SessionMaterial | null>(null);
+  const [warmupMaterial, setWarmupMaterial] = useState<SessionMaterial | null>(null);
 
   const streamRef = useRef<MediaStream | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -105,6 +106,8 @@ function PracticeFlow() {
         setSkills(sk);
         setPlan(p);
         setMaterial(buildMaterial(d, recentPrompts));
+        const w = kind === "daily" ? DRILL_MAP[p.warmupId] : undefined;
+        setWarmupMaterial(w ? buildMaterial(w) : null);
         setPhase("setup");
       } catch (e) {
         console.error(e);
@@ -449,9 +452,9 @@ function PracticeFlow() {
   }
 
   // ---------------------------------------------------------------- WARMUP
-  if (phase === "warmup" && warmup && material) {
+  if (phase === "warmup" && warmup && material && warmupMaterial) {
     const total = warmup.minutes * 60;
-    const wm = buildWarmupMaterial(warmup);
+    const wm = warmupMaterial;
     const ticker = wm.items;
     return (
       <div className="max-w-[720px] pb-12">
@@ -686,10 +689,6 @@ function PracticeFlow() {
   }
 
   return null;
-}
-
-function buildWarmupMaterial(warmup: Drill): SessionMaterial {
-  return buildMaterial(warmup);
 }
 
 function PromptBlock({ material, showParagraph }: { material: SessionMaterial; showParagraph?: boolean }) {
