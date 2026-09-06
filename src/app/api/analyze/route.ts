@@ -26,6 +26,25 @@ const bodySchema = z.object({
     durationSec: z.number().positive(),
     displayName: z.string().optional(),
     audio: z.any().optional(),
+    endedBy: z.enum(["timer", "user"]).optional(),
+    history: z
+      .object({
+        sessions: z.array(
+          z.object({
+            date: z.string(),
+            drill: z.string(),
+            overall: z.number(),
+            fillersPerMin: z.number(),
+            pitchSpread: z.number().optional(),
+            tags: z.array(z.string()),
+            topFix: z.string().optional(),
+          }),
+        ),
+        dimensionAvg: z.record(z.string(), z.number()).optional(),
+        recurringTags: z.array(z.object({ tag: z.string(), count: z.number() })).optional(),
+        focus: z.object({ skillId: z.string(), sessions: z.number() }).optional(),
+      })
+      .optional(),
     previous: z
       .object({
         topFixTitle: z.string().optional(),

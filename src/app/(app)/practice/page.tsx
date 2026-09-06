@@ -23,6 +23,7 @@ import { VeroLine, VeroMark } from "@/components/VeroMark";
 import { Vero } from "@/components/Vero";
 import { Confetti } from "@/components/Confetti";
 import { getGeminiKeyStatus } from "@/lib/keys";
+import { averageScores } from "@/lib/coach";
 import { Timer } from "@/components/Timer";
 import { Waveform } from "@/components/Waveform";
 import { CameraStage } from "@/components/CameraStage";
@@ -38,6 +39,10 @@ type Phase = "loading" | "setup" | "warmup" | "brief" | "prep" | "record" | "rev
 type Kind = "daily" | "free" | "baseline";
 
 const CHIPS = ["Rambled", "Too fast", "Too many ums", "Lost the structure", "Strong ending", "Good energy", "Flat voice", "Nailed the point"];
+/** Seconds past the drill's time to finish a sentence before the hard stop. */
+const GRACE = 5;
+const RESPINS = 2;
+const RESPIN_KINDS = new Set(["topic", "object", "question", "story-prompt", "expert", "statements"]);
 
 function PracticeFlow() {
   const { profile } = useAuth();
@@ -65,6 +70,10 @@ function PracticeFlow() {
 
   const [drive, setDrive] = useState<"checking" | "ready" | "missing" | "error">("checking");
   const [gemini, setGemini] = useState<"checking" | "ready" | "missing">("checking");
+  const [respins, setRespins] = useState(0);
+  const [wheelKey, setWheelKey] = useState(0);
+  const [recentPrompts, setRecentPrompts] = useState<string[]>([]);
+  const endedByRef = useRef<"timer" | "user">("user");
   const [elapsed, setElapsed] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [recording, setRecording] = useState(false);
@@ -106,11 +115,12 @@ function PracticeFlow() {
         }
         if (!alive) return;
         const d = DRILL_MAP[p.drillId];
-        const recentPrompts = ss.slice(0, 20).map((s) => s.prompt ?? "");
+        const rp = ss.slice(0, 20).map((s) => s.prompt ?? "").filter(Boolean);
+        setRecentPrompts(rp);
         setSessions(ss);
         setSkills(sk);
         setPlan(p);
-        setMaterial(buildMaterial(d, recentPrompts));
+        setMaterial(buildMaterial(d, rp));
         const w = kind === "daily" ? DRILL_MAP[p.warmupId] : undefined;
         setWarmupMaterial(w ? buildMaterial(w) : null);
         setPhase("setup");
@@ -200,19 +210,21 @@ function PracticeFlow() {
 
   // ---------------------------------------------------------------- pipeline
   const runPipeline = async (rec: { blob: Blob; mimeType: string; durationSec: number; audio: AudioMetrics }) => {
-    const s = sessionRef.current;
-    if (!s || !profile) return;
+    const base = sessionRef.current;
+    if (!base || !profile) return;
+    const s: SessionDoc = { ...base, endedBy: endedByRef.current };
+    sessionRef.current = s;
     setStage("uploading");
     setUploadPct(0);
     try {
-      await patchSession(profile.uid, s.id, { audio: rec.audio, status: "uploading" });
+      await patchSession(profile.uid, s.id, { audio: rec.audio, endedBy: s.endedBy, status: "uploading" });
       const recording = await uploadRecording({ profile, session: s, blob: rec.blob, mimeType: rec.mimeType, durationSec: rec.durationSec, onProgress: setUploadPct });
       const withRec = { ...s, audio: rec.audio, recording };
       sessionRef.current = withRec;
       setSession(withRec);
       setStage("analyzing");
-      const { analysis, xp, profile: updated } = await analyzeSession({ profile, session: withRec, skills, sessions, audio: rec.audio });
-      const done = { ...withRec, ai: analysis, status: "analyzed" as const, xp };
+      const { analysis, xp, profile: updated, coach } = await analyzeSession({ profile, session: withRec, skills, sessions, audio: rec.audio });
+      const done = { ...withRec, ai: analysis, status: "analyzed" as const, xp, coach };
       sessionRef.current = done;
       setSession(done);
       setResult({ xp, streak: liveStreak(updated.streak, localDateStr()) });
@@ -319,7 +331,10 @@ function PracticeFlow() {
     const t = setInterval(() => {
       const e = recorderRef.current?.elapsed ?? 0;
       setElapsed(e);
-      if (e >= (drill.speakSeconds ?? 60)) stopRecording();
+      if (e >= (drill.speakSeconds ?? 60) + GRACE) {
+        endedByRef.current = "timer";
+        stopRecording();
+      }
     }, 100);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -334,8 +349,8 @@ function PracticeFlow() {
         const s = sessionRef.current!;
         setStage("analyzing");
         try {
-          const { analysis, xp, profile: updated } = await analyzeSession({ profile: profile!, session: s, skills, sessions, audio: blobRef.current!.audio });
-          const done = { ...s, ai: analysis, status: "analyzed" as const, xp };
+          const { analysis, xp, profile: updated, coach } = await analyzeSession({ profile: profile!, session: s, skills, sessions, audio: blobRef.current!.audio });
+          const done = { ...s, ai: analysis, status: "analyzed" as const, xp, coach };
           sessionRef.current = done;
           setSession(done);
           setResult({ xp, streak: liveStreak(updated.streak, localDateStr()) });
@@ -358,6 +373,17 @@ function PracticeFlow() {
   const finish = async () => {
     await saveNotes();
     router.replace("/today");
+  };
+
+  const canRespin = Boolean(drill && material?.prompt && RESPIN_KINDS.has(drill.material.kind));
+  const respin = () => {
+    if (!drill || !material || respins >= RESPINS) return;
+    const exclude = [...recentPrompts, material.prompt ?? ""].filter(Boolean);
+    setRecentPrompts(exclude);
+    setMaterial(buildMaterial(drill, exclude));
+    setWheelDone(false);
+    setWheelKey((k) => k + 1);
+    setRespins((r) => r + 1);
   };
 
   const exit = () => {
@@ -540,11 +566,22 @@ function PracticeFlow() {
         </div>
         <div className="mt-8 hairline-strong pt-6">
           {material.candidates && material.prompt ? (
-            <TopicWheel candidates={material.candidates} final={material.prompt} onDone={() => setWheelDone(true)} />
+            <TopicWheel key={wheelKey} candidates={material.candidates} final={material.prompt} onDone={() => setWheelDone(true)} />
           ) : (
-            <PromptBlock material={material} />
+            <PromptBlock key={wheelKey} material={material} />
           )}
         </div>
+        {canRespin && (
+          <button
+            type="button"
+            className="mt-3 label-ink min-h-[44px] flex items-center gap-2 disabled:opacity-40"
+            disabled={respins >= RESPINS || (Boolean(material.candidates) && !wheelDone)}
+            onClick={respin}
+          >
+            {respins >= RESPINS ? "No more spins" : "New topic"}
+            {respins < RESPINS && <span className="text-ink-3">· {RESPINS - respins} left</span>}
+          </button>
+        )}
         <ol className="mt-6 space-y-1.5">
           {drill.steps.map((s, i) => (
             <li key={s} className="flex gap-3 text-[15px] text-ink-2">
@@ -621,12 +658,21 @@ function PracticeFlow() {
           )}
           {framework && <FrameworkStrip framework={framework} compact className="mt-3" />}
         </div>
-        <CameraStage stream={stream} hasVideo={hasVideo} analyzer={recAnalyzer ?? displayAnalyzer} recording={recording} elapsed={elapsed} total={speak} countdown={countdown} className="mt-4" />
+        <CameraStage stream={stream} hasVideo={hasVideo} analyzer={recAnalyzer ?? displayAnalyzer} recording={recording} elapsed={elapsed} total={speak} grace={GRACE} countdown={countdown} className="mt-4" />
         <div className="px-5 md:px-0 mt-4 flex items-center gap-4">
-          <button type="button" className="btn-accent flex-1 min-h-[60px]" disabled={!recording || !canStop} onClick={stopRecording}>
-            {recording ? (canStop ? "Stop" : `Keep going · ${mmss(minSpeak - elapsed)}`) : "Starting"}
+          <button
+            type="button"
+            className="btn-accent flex-1 min-h-[60px]"
+            disabled={!recording || !canStop}
+            onClick={() => {
+              endedByRef.current = "user";
+              stopRecording();
+            }}
+          >
+            {recording ? (canStop ? (elapsed > speak ? "Done" : "Stop") : `Keep going · ${mmss(minSpeak - elapsed)}`) : "Starting"}
           </button>
         </div>
+        <p className="px-5 md:px-0 mt-2 text-[12px] text-ink-3">Stop whenever you land the last sentence. {GRACE}s of grace after the clock.</p>
         {focus && <p className="px-5 md:px-0 mt-4 text-[13px] text-ink-2">{focus.cue}</p>}
       </div>
     );
@@ -713,7 +759,7 @@ function PracticeFlow() {
             <p className="font-display text-[22px] md:text-[28px] leading-tight tracking-[-0.02em] mt-2">{session.ai.oneLiner}</p>
           </div>
         </div>
-        <FeedbackView session={session} previous={previous} xpEarned={result?.xp} streak={result?.streak} hideLine className="mt-8" />
+        <FeedbackView session={session} previous={previous} previousSessions={sessions} average={averageScores(sessions)} xpEarned={result?.xp} streak={result?.streak} hideLine className="mt-8" />
         <div className="mt-10 flex flex-col gap-3">
           <button type="button" className="btn-accent btn-block min-h-[60px]" onClick={finish}>
             {kind === "baseline" ? "Start training" : "Done"}

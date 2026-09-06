@@ -13,6 +13,7 @@ import { VeroMark } from "@/components/VeroMark";
 import { analyzeSession } from "@/lib/analysis-client";
 import { relativeDay } from "@/lib/format";
 import { DRILL_MAP } from "@/content/drills";
+import { averageScores } from "@/lib/coach";
 
 export default function SessionPage() {
   const { profile } = useAuth();
@@ -20,6 +21,7 @@ export default function SessionPage() {
   const router = useRouter();
   const [session, setSession] = useState<SessionDoc | null>(null);
   const [previous, setPrevious] = useState<SessionDoc | null>(null);
+  const [earlier, setEarlier] = useState<SessionDoc[]>([]);
   const [sessions, setSessions] = useState<SessionDoc[]>([]);
   const [skills, setSkills] = useState<Record<string, SkillState>>({});
   const [notes, setNotes] = useState("");
@@ -43,7 +45,9 @@ export default function SessionPage() {
       setSessions(all);
       setSkills(sk);
       const idx = all.findIndex((x) => x.id === s.id);
-      setPrevious(all.slice(idx + 1).find((x) => x.status === "analyzed" && x.ai) ?? null);
+      const before = idx >= 0 ? all.slice(idx + 1) : all.filter((x) => x.createdAt < s.createdAt);
+      setEarlier(before);
+      setPrevious(before.find((x) => x.status === "analyzed" && x.ai) ?? null);
     })();
     return () => {
       alive = false;
@@ -62,8 +66,8 @@ export default function SessionPage() {
     setBusy(true);
     setError(null);
     try {
-      const { analysis, xp } = await analyzeSession({ profile, session, skills, sessions });
-      setSession({ ...session, ai: analysis, status: "analyzed", xp });
+      const { analysis, xp, coach } = await analyzeSession({ profile, session, skills, sessions });
+      setSession({ ...session, ai: analysis, status: "analyzed", xp, coach });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -140,7 +144,7 @@ export default function SessionPage() {
       <div className="mt-12 md:mt-0">
         {session.ai ? (
           <>
-            <FeedbackView session={session} previous={previous} xpEarned={session.xp} />
+            <FeedbackView session={session} previous={previous} previousSessions={earlier} average={averageScores(earlier)} xpEarned={session.xp} />
             <Transcript text={session.ai.transcript} className="mt-10" />
           </>
         ) : (

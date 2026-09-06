@@ -5,10 +5,16 @@ import { analyzeMedia } from "@/lib/server/gemini";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-/** Development only: run the Vero pipeline on a local file. */
+/** Development only: run the Vero pipeline on a local file with a synthetic history. */
 export async function POST(req: Request) {
   if (process.env.NODE_ENV === "production") return NextResponse.json({ error: "not_found" }, { status: 404 });
-  const { path, mimeType, drillId = "m-321", durationSec = 60 } = (await req.json()) as { path: string; mimeType: string; drillId?: string; durationSec?: number };
+  const { path, mimeType, drillId = "m-321", durationSec = 60, endedBy = "timer" } = (await req.json()) as {
+    path: string;
+    mimeType: string;
+    drillId?: string;
+    durationSec?: number;
+    endedBy?: "timer" | "user";
+  };
   const started = Date.now();
   try {
     const bytes = await readFile(path);
@@ -19,6 +25,7 @@ export async function POST(req: Request) {
       focusSkillId: "fillers",
       frameworkId: "three-two-one",
       durationSec,
+      endedBy,
       displayName: "Dhairya",
       audio: {
         durationSec,
@@ -27,14 +34,28 @@ export async function POST(req: Request) {
         longestPauseSec: 1.4,
         meanPauseSec: 0.7,
         pitchMedianHz: 118,
-        pitchSpreadSemitones: 4.2,
-        varietyScore: 21,
+        pitchSpreadSemitones: 3.8,
+        varietyScore: 18,
         volumeMeanDb: -22,
         volumeRangeDb: 9,
-        monotone: false,
+        monotone: true,
         envelope: [],
       },
-      previous: { topFixTitle: "Finish your sentences", topFixSkillId: "sentence-endings", fillersPerMin: 9.1, overall: 4.8 },
+      history: {
+        sessions: [
+          { date: "2026-09-05", drill: "60-second wheel", overall: 6.4, fillersPerMin: 2.1, pitchSpread: 4.1, tags: ["monotone", "no-hook"], topFix: "Replace um with silence" },
+          { date: "2026-09-05", drill: "PREP an answer", overall: 6.2, fillersPerMin: 3.0, pitchSpread: 3.9, tags: ["monotone", "flat-emphasis"], topFix: "Finish your sentences" },
+          { date: "2026-09-04", drill: "3-2-1 on an object", overall: 6.0, fillersPerMin: 4.5, pitchSpread: 4.4, tags: ["monotone", "fillers"], topFix: "Replace um with silence" },
+          { date: "2026-09-04", drill: "Baseline", overall: 5.1, fillersPerMin: 8.0, pitchSpread: 3.6, tags: ["fillers", "monotone", "no-point-first"], topFix: "Replace um with silence" },
+        ],
+        dimensionAvg: { clarity: 6.6, structure: 6.3, vocalVariety: 5.9, energy: 6.1, presence: 6.5, engagement: 6.0 },
+        recurringTags: [
+          { tag: "monotone", count: 4 },
+          { tag: "fillers", count: 2 },
+        ],
+        focus: { skillId: "fillers", sessions: 2 },
+      },
+      previous: { topFixTitle: "Replace um with silence", topFixSkillId: "fillers", fillersPerMin: 2.1, overall: 6.4 },
     });
     return NextResponse.json({ ms: Date.now() - started, analysis });
   } catch (e) {

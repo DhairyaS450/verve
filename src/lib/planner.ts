@@ -1,15 +1,8 @@
 import { DRILLS, MAINS, WARMUPS, DRILL_MAP } from "@/content/drills";
 import { SKILLS, SKILL_MAP } from "@/content/skills";
 import type { Drill } from "@/content/types";
-import type { Goal, PlanDoc, SessionDoc, SkillState, UserProfile } from "./types";
-import { fmt1 } from "./format";
-
-const GOAL_DEFAULT_FOCUS: Record<Goal, string> = {
-  stage: "pause",
-  spot: "wheel-60",
-  story: "story-formula",
-  confidence: "volume",
-};
+import type { PlanDoc, SessionDoc, SkillState, UserProfile } from "./types";
+import { decideFocus } from "./coach";
 
 export function isUnlocked(skillId: string, skills: Record<string, SkillState>): boolean {
   const s = SKILL_MAP[skillId];
@@ -22,7 +15,6 @@ export function unlockedSkillIds(skills: Record<string, SkillState>): string[] {
 }
 
 function drillUnlocked(d: Drill, skills: Record<string, SkillState>) {
-  // A drill is available if its primary skill is unlocked.
   return isUnlocked(d.skillIds[0], skills);
 }
 
@@ -36,24 +28,17 @@ function lastWarmup(warmupId: string, sessions: SessionDoc[]): number {
   return s?.createdAt ?? 0;
 }
 
-export function reasonLine(last: SessionDoc | undefined): string {
-  if (!last?.ai) return "First session. I need a baseline, not a performance.";
-  const f = last.ai.fillers?.perMin;
-  const fix = last.ai.topFix?.title;
-  if (typeof f === "number" && f >= 4 && /filler|um|uh|pause/i.test(fix ?? "")) {
-    return `Last time: ${fmt1(f)} fillers a minute. Today we fix that.`;
+/**
+ * The focus for today. The stored block (set by the coach after each session) wins;
+ * otherwise decide fresh from history.
+ */
+export function chooseFocus(profile: UserProfile, sessions: SessionDoc[], skills: Record<string, SkillState>): { skillId: string; reason: string } {
+  const block = profile.focus;
+  if (block && SKILL_MAP[block.skillId] && isUnlocked(block.skillId, skills)) {
+    return { skillId: block.skillId, reason: block.reason ?? `Focus: ${SKILL_MAP[block.skillId].name}.` };
   }
-  if (fix) return `Last time: ${fix.toLowerCase()}. Today we fix that.`;
-  return "Building on yesterday.";
-}
-
-export function chooseFocus(profile: UserProfile, sessions: SessionDoc[], skills: Record<string, SkillState>): string {
-  const last = sessions.find((s) => s.status === "analyzed" && s.ai);
-  const candidates = [last?.ai?.nextFocusSkillId, profile.focusSkillId, profile.goal ? GOAL_DEFAULT_FOCUS[profile.goal] : undefined, "wheel-60"];
-  for (const c of candidates) {
-    if (c && SKILL_MAP[c] && isUnlocked(c, skills)) return c;
-  }
-  return "wheel-60";
+  const d = decideFocus({ profile, sessions, skills });
+  return { skillId: d.skillId, reason: d.reason };
 }
 
 export interface PlanInput {
@@ -65,7 +50,7 @@ export interface PlanInput {
 }
 
 export function buildPlan({ profile, skills, sessions, date, forceDrillId }: PlanInput): PlanDoc {
-  const focus = chooseFocus(profile, sessions, skills);
+  const { skillId: focus, reason } = chooseFocus(profile, sessions, skills);
   const focusSkill = SKILL_MAP[focus];
   const budget = profile.sessionMinutes ?? 10;
   const recent = sessions.slice(0, 7);
@@ -91,8 +76,8 @@ export function buildPlan({ profile, skills, sessions, date, forceDrillId }: Pla
       [...pool].sort((a, b) => {
         const aNew = lastDone(a.id, sessions) === 0 ? 0 : 1;
         const bNew = lastDone(b.id, sessions) === 0 ? 0 : 1;
-        if (aNew !== bNew) return aNew - bNew; // never-done first
-        return lastDone(a.id, sessions) - lastDone(b.id, sessions); // then least recent
+        if (aNew !== bNew) return aNew - bNew;
+        return lastDone(a.id, sessions) - lastDone(b.id, sessions);
       });
 
     if (explore) {
@@ -115,13 +100,12 @@ export function buildPlan({ profile, skills, sessions, date, forceDrillId }: Pla
     if (!main) main = rank(available.filter(fits))[0] ?? rank(available)[0] ?? DRILL_MAP["m-wheel-60"];
   }
 
-  const last = sessions.find((s) => s.status === "analyzed" && s.ai);
   return {
     date,
     warmupId: warmup.id,
     drillId: main.id,
     focusSkillId: focus,
-    reason: reasonLine(last),
+    reason,
     generatedAt: Date.now(),
     completed: false,
   };

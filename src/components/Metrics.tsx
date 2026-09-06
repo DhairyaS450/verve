@@ -25,10 +25,10 @@ export function Metric({
   const good = delta === undefined || delta === null || delta === 0 ? null : lowerIsBetter ? delta < 0 : delta > 0;
   const sizes = { md: "text-[40px]", lg: "text-[56px] md:text-[72px]", xl: "text-[72px] md:text-[112px]" };
   return (
-    <div className={clsx("min-w-0", className)}>
-      <div className="label">{label}</div>
-      <div className="flex items-baseline gap-2 mt-1">
-        <span className={clsx("metric", sizes[size])}>{value}</span>
+    <div className={clsx("min-w-0 overflow-hidden", className)}>
+      <div className="label truncate">{label}</div>
+      <div className="flex items-baseline gap-2 mt-1 min-w-0">
+        <span className={clsx("metric break-words", sizes[size])}>{value}</span>
         {unit && <span className="text-[13px] text-ink-2">{unit}</span>}
       </div>
       {delta !== undefined && delta !== null && (
@@ -51,19 +51,23 @@ const SCORE_LABELS: { key: keyof Scores; label: string }[] = [
   { key: "engagement", label: "Engagement" },
 ];
 
-export function ScoreBars({ scores, previous, className }: { scores: Scores; previous?: Scores | null; className?: string }) {
+export function ScoreBars({ scores, previous, average, className }: { scores: Scores; previous?: Scores | null; average?: Scores | null; className?: string }) {
   return (
     <div className={clsx("space-y-3", className)}>
       {SCORE_LABELS.map(({ key, label }) => {
         const v = scores[key];
         const p = previous?.[key];
+        const a = average?.[key];
         const d = p !== undefined && p !== null ? Math.round((v - p) * 10) / 10 : null;
         return (
-          <div key={key} className="grid grid-cols-[110px_1fr_auto] items-center gap-3">
-            <span className="text-[13px] text-ink-2">{label}</span>
+          <div key={key} className="grid grid-cols-[96px_1fr_auto] md:grid-cols-[110px_1fr_auto] items-center gap-3 min-w-0">
+            <span className="text-[13px] text-ink-2 truncate">{label}</span>
             <div className="h-[6px] bg-paper-3 relative">
               <div className="h-full bg-ink" style={{ width: `${(v / 10) * 100}%` }} />
-              {p !== undefined && p !== null && <div className="absolute top-[-3px] w-[2px] h-[12px] bg-ink-3" style={{ left: `calc(${(p / 10) * 100}% - 1px)` }} />}
+              {a !== undefined && a !== null && (
+                <div title={`Your average: ${fmt1(a)}`} className="absolute top-[-4px] w-[6px] h-[14px] border border-ink bg-paper" style={{ left: `calc(${(a / 10) * 100}% - 3px)` }} />
+              )}
+              {a === undefined && p !== undefined && p !== null && <div className="absolute top-[-3px] w-[2px] h-[12px] bg-ink-3" style={{ left: `calc(${(p / 10) * 100}% - 1px)` }} />}
             </div>
             <span className="num text-[13px] w-[64px] text-right">
               <span className="font-semibold">{fmt1(v)}</span>

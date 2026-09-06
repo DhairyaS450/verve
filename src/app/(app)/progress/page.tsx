@@ -64,10 +64,10 @@ export default function ProgressPage() {
   return (
     <div className="pb-12">
       <p className="label">Progress</p>
-      <div className="mt-4 grid grid-cols-3 gap-4 md:max-w-[560px]">
+      <div className="mt-4 grid grid-cols-3 gap-4 md:max-w-[560px] min-w-0">
         <Metric label="Sessions" value={String(analyzed.length)} size="lg" />
         <Metric label="Streak" value={String(streak)} unit="days" size="lg" />
-        <Metric label={`Level ${lvl.level}`} value={lvl.name} size="md" hint={lvl.nextXp ? `${profile.xp} / ${lvl.nextXp} xp` : `${profile.xp} xp`} />
+        <Metric label="Level" value={String(lvl.level)} size="lg" hint={`${lvl.name}${lvl.nextXp ? ` · ${profile.xp}/${lvl.nextXp} xp` : ` · ${profile.xp} xp`}`} />
       </div>
 
       <section className="mt-12 md:grid md:grid-cols-[1fr_280px] md:gap-16">

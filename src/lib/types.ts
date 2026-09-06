@@ -18,6 +18,7 @@ export interface UserProfile {
   xp: number;
   totalSessions: number;
   focusSkillId?: string;
+  focus?: FocusBlock;
   driveFolderId?: string;
   driveEmail?: string;
   driveConnected?: boolean;
@@ -66,6 +67,44 @@ export interface Moment {
   note: string;
 }
 
+/** One thing Vero saw. Incidents are situational and never drive the plan. */
+export interface Observation {
+  tag: string;
+  skillId: string | null;
+  severity: 1 | 2 | 3;
+  incident: boolean;
+  note: string;
+  t?: number;
+}
+
+export interface CoachEvidence {
+  kind: "pattern" | "dimension" | "keep" | "vero" | "goal";
+  tag?: string;
+  count?: number;
+  of?: number;
+  dimension?: string;
+  avg?: number;
+  day?: number;
+}
+
+export interface CoachDecision {
+  skillId: string;
+  /** ≤ 14 words, shown on Today and after a session */
+  reason: string;
+  evidence: CoachEvidence;
+}
+
+/** The current training block: one focus, held for ~3 sessions unless it improves. */
+export interface FocusBlock {
+  skillId: string;
+  since: string;
+  sessions: number;
+  startAvg?: number;
+  startFillers?: number;
+  reason?: string;
+  evidence?: CoachEvidence;
+}
+
 export interface VeroAnalysis {
   transcript: string;
   wordCount: number;
@@ -76,6 +115,7 @@ export interface VeroAnalysis {
   win: { title: string; detail: string };
   framework?: { followed: boolean; missing: string[] };
   moments: Moment[];
+  observations?: Observation[];
   nextFocusSkillId: string;
   oneLiner: string;
   model: string;
@@ -113,6 +153,9 @@ export interface SessionDoc {
   };
   audio?: AudioMetrics;
   ai?: VeroAnalysis;
+  /** What decided the next focus after this session */
+  coach?: CoachDecision;
+  endedBy?: "timer" | "user";
   notes?: string;
   selfRating?: number;
   status: SessionStatus;

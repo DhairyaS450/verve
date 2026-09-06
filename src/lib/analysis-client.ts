@@ -7,6 +7,7 @@ import { fileExtension } from "./recorder";
 import type { AudioMetrics, SessionDoc, SkillState, UserProfile, VeroAnalysis } from "./types";
 import { isNewDrill } from "./planner";
 import { firstName } from "./format";
+import { historyForPrompt } from "./coach";
 
 export async function uploadRecording(opts: {
   profile: UserProfile;
@@ -32,12 +33,14 @@ export async function analyzeSession(opts: {
   skills: Record<string, SkillState>;
   sessions: SessionDoc[];
   audio?: AudioMetrics;
-}): Promise<{ analysis: VeroAnalysis; xp: number; profile: UserProfile }> {
+}): Promise<{ analysis: VeroAnalysis; xp: number; profile: UserProfile; coach: SessionDoc["coach"] }> {
   const { profile, session, skills, sessions, audio } = opts;
   if (!session.recording) throw new Error("no recording");
   const user = firebaseAuth().currentUser;
   if (!user) throw new Error("not signed in");
-  const previous = sessions.find((s) => s.id !== session.id && s.status === "analyzed" && s.ai);
+  const others = sessions.filter((s) => s.id !== session.id);
+  const previous = others.find((s) => s.status === "analyzed" && s.ai);
+  const history = historyForPrompt(others, profile.focus);
   await patchSession(profile.uid, session.id, { status: "analyzing" });
   const [token, ownKey] = await Promise.all([getAccessToken(profile.uid), getGeminiKey(profile.uid).catch(() => null)]);
   const res = await fetch("/api/analyze", {
@@ -58,6 +61,8 @@ export async function analyzeSession(opts: {
         durationSec: session.recording.durationSec,
         displayName: firstName(profile.displayName),
         audio: audio ?? session.audio,
+        endedBy: session.endedBy,
+        history,
         previous: previous?.ai
           ? {
               topFixTitle: previous.ai.topFix.title,
@@ -87,7 +92,8 @@ export async function analyzeSession(opts: {
     session,
     analysis,
     skills,
-    isNewDrill: isNewDrill(session.drillId, sessions.filter((s) => s.id !== session.id)),
+    sessions: others,
+    isNewDrill: isNewDrill(session.drillId, others),
   });
-  return { analysis, xp: committed.xp, profile: committed.profile };
+  return { analysis, xp: committed.xp, profile: committed.profile, coach: committed.coach };
 }

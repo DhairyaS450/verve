@@ -18,6 +18,7 @@ export function CameraStage({
   elapsed,
   total,
   countdown,
+  grace = 0,
   className,
 }: {
   stream: MediaStream | null;
@@ -27,6 +28,8 @@ export function CameraStage({
   elapsed: number;
   total: number;
   countdown?: number | null;
+  /** Seconds allowed past `total` to finish a sentence */
+  grace?: number;
   className?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -43,7 +46,8 @@ export function CameraStage({
     };
   }, [stream, hasVideo]);
 
-  const remaining = Math.max(0, total - elapsed);
+  const overtime = elapsed > total;
+  const remaining = overtime ? Math.min(grace, elapsed - total) : Math.max(0, total - elapsed);
   const frac = total > 0 ? Math.min(1, elapsed / total) : 0;
 
   return (
@@ -63,8 +67,14 @@ export function CameraStage({
       {/* Clock + status */}
       <div className="absolute top-3 left-3 flex items-center gap-2">
         <span className={clsx("w-[10px] h-[10px] rounded-full", recording ? "bg-accent blink" : "bg-paper/40")} />
-        <span className="num font-display text-[20px] leading-none">{mmss(remaining)}</span>
+        <span className={clsx("num font-display text-[20px] leading-none", overtime && "text-accent")}>
+          {overtime ? "+" : ""}
+          {mmss(remaining)}
+        </span>
       </div>
+      {overtime && recording && (
+        <div className="absolute top-12 left-3 label text-accent">Finish the sentence</div>
+      )}
       {countdown !== null && countdown !== undefined && countdown > 0 && (
         <div className="absolute inset-0 flex items-center justify-center bg-ink/60">
           <span className="metric text-[140px] text-paper">{countdown}</span>

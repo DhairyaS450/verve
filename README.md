@@ -10,7 +10,8 @@ Verve is a Duolingo-style trainer for speaking: warm the voice, spin a random to
 2. **Warmup** (2–3 min) — pen-in-mouth reads, sirens, volume dials, word association, yes-and…
 3. **Drill** (1–10 min) — topic wheel, PREP / 3-2-1 / What-So-What-Now-What, story formula, tough questions, toasts, keynotes. Recorded on camera with a live waveform.
 4. **Review** — the recording uploads straight to a `Verve` folder in **your Google Drive** (nothing is stored on Verve's servers). While it uploads you jot a one-line reflection.
-5. **Vero's verdict** — verbatim transcript, fillers per minute, pace, vocal variety, six scores, one fix, one win, timestamped moments, the next focus.
+5. **Vero's verdict** — verbatim transcript, fillers per minute, pace, vocal variety, six scores, one fix, one win, timestamped moments. Vero tags what it sees (`src/content/observations.ts`) and marks one-off slips as incidents.
+6. **The coach** (`src/lib/coach.ts`) — deterministic. It looks across your last six sessions, not one clip: recurring tags and the weakest scoring dimension pick the next focus, a focus is held for a three-session block unless it clearly improves, and incidents (a timer cut-off, one lost word) never become a focus. Vocal variety is anchored to measured pitch spread so scores move.
 6. **Progress** — trend lines against target bands, per-branch skill levels, full history with playback from Drive.
 
 Deterministic voice metrics (pauses, pitch spread in semitones, volume range, variety score) are computed in the browser during recording and handed to Vero alongside the video.

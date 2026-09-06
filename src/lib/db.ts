@@ -20,7 +20,7 @@ import { firestore } from "./firebase";
 import type { DrivePrivate, GeminiPrivate, PlanDoc, SessionDoc, SkillState, UserProfile, VeroAnalysis } from "./types";
 import { localDateStr } from "./format";
 import { applySkillXP, nextStreak, sessionXP } from "./xp";
-import { SKILL_MAP } from "@/content/skills";
+import { decideFocus, nextFocusBlock } from "./coach";
 
 export const ROOT = "verveUsers";
 export const userDocPath = (uid: string) => `${ROOT}/${uid}`;
@@ -161,24 +161,33 @@ export async function commitSessionResults(opts: {
   session: SessionDoc;
   analysis: VeroAnalysis;
   skills: Record<string, SkillState>;
+  sessions: SessionDoc[];
   isNewDrill: boolean;
-}): Promise<{ xp: number; skillUpdates: Record<string, SkillState>; profile: UserProfile }> {
-  const { profile, session, analysis, skills, isNewDrill } = opts;
+}): Promise<{ xp: number; skillUpdates: Record<string, SkillState>; profile: UserProfile; coach: SessionDoc["coach"] }> {
+  const { profile, session, analysis, skills, sessions, isNewDrill } = opts;
   const db = firestore();
   const batch = writeBatch(db);
   const xp = sessionXP(analysis, isNewDrill, Boolean(session.warmupId));
   const today = localDateStr();
   const streak = nextStreak(profile.streak, today);
   const skillUpdates = applySkillXP(skills, session.skillIds, analysis.scores.overall, Date.now());
+  const mergedSkills = { ...skills, ...skillUpdates };
   for (const [id, st] of Object.entries(skillUpdates)) {
     batch.set(doc(db, `${userDocPath(profile.uid)}/skills/${id}`), st, { merge: true });
   }
-  const nextFocus = SKILL_MAP[analysis.nextFocusSkillId] ? analysis.nextFocusSkillId : profile.focusSkillId;
+
+  // The coach decides the next focus from history, with this session included.
+  const analyzedSession: SessionDoc = { ...session, ai: analysis, status: "analyzed" };
+  const history = [analyzedSession, ...sessions.filter((s) => s.id !== session.id)];
+  const decision = decideFocus({ profile, sessions: history, skills: mergedSkills });
+  const focus = nextFocusBlock(profile.focus, decision, history);
+
   const profilePatch: Partial<UserProfile> = {
     xp: (profile.xp ?? 0) + xp,
     totalSessions: (profile.totalSessions ?? 0) + 1,
     streak,
-    focusSkillId: nextFocus,
+    focusSkillId: decision.skillId,
+    focus,
   };
   if (session.kind === "baseline") {
     profilePatch.baselineSessionId = session.id;
@@ -187,14 +196,15 @@ export async function commitSessionResults(opts: {
   batch.update(doc(db, userDocPath(profile.uid)), stripUndefined(profilePatch));
   batch.set(
     doc(db, `${userDocPath(profile.uid)}/sessions/${session.id}`),
-    stripUndefined({ ai: analysis, status: "analyzed", xp, isNewDrill }),
+    stripUndefined({ ai: analysis, status: "analyzed", xp, isNewDrill, coach: decision }),
     { merge: true },
   );
   if (session.kind === "daily") {
     batch.set(doc(db, `${userDocPath(profile.uid)}/plans/${session.date}`), { completed: true, sessionId: session.id }, { merge: true });
   }
+  // Tomorrow's plan is rebuilt from the new focus.
   await batch.commit();
-  return { xp, skillUpdates, profile: { ...profile, ...profilePatch } as UserProfile };
+  return { xp, skillUpdates, profile: { ...profile, ...profilePatch } as UserProfile, coach: decision };
 }
 
 export function stripUndefined<T extends object>(obj: T): T {

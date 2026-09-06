@@ -16,6 +16,8 @@ import { SessionList } from "@/components/SessionList";
 import { Vero } from "@/components/Vero";
 import { Flame } from "@/components/Flame";
 import { Confetti } from "@/components/Confetti";
+import { averageScores, decideFocus } from "@/lib/coach";
+import type { UserProfile } from "@/lib/types";
 
 const MOCK_AI: NonNullable<SessionDoc["ai"]> = {
   transcript: "So, um, traffic cones are, like, one of those things you never think about. Um, first, they mark danger. Second, they, uh, guide traffic. And third, you know, they're just orange. The reason I'm telling you this is...",
@@ -31,11 +33,47 @@ const MOCK_AI: NonNullable<SessionDoc["ai"]> = {
     { t: 27, kind: "fix", note: "Three ums before the second point" },
     { t: 55, kind: "fix", note: "Trailed off instead of landing" },
   ],
+  observations: [
+    { tag: "fillers", skillId: "fillers", severity: 2, incident: false, note: "Seven fillers, mostly at sentence starts." },
+    { tag: "monotone", skillId: "pitch", severity: 2, incident: false, note: "Pitch stayed within four semitones." },
+    { tag: "cut-off-by-timer", skillId: null, severity: 1, incident: true, note: "The clock ended the last sentence." },
+  ],
   nextFocusSkillId: "fillers",
   oneLiner: "Good bones. Your ums are hiding a clear thinker.",
   model: "mock",
   analyzedAt: Date.now(),
 };
+
+/** A history where vocal variety has sat at ~6 for five sessions and monotone keeps getting tagged. */
+function mockHistory(n: number, opts: { monotone?: boolean; withObs?: boolean } = {}): SessionDoc[] {
+  return Array.from({ length: n }, (_, i) => ({
+    ...MOCK_SESSION,
+    id: `h${i}`,
+    createdAt: Date.now() - (i + 1) * 86_400_000,
+    date: `2026-09-0${5 - i}`,
+    audio: { durationSec: 60, speakingRatio: 0.8, pauseCount: 4, longestPauseSec: 1.2, meanPauseSec: 0.7, pitchMedianHz: 120, pitchSpreadSemitones: opts.monotone ? 3.9 : 8.5, varietyScore: 20, volumeMeanDb: -22, volumeRangeDb: 8, monotone: Boolean(opts.monotone), envelope: [] },
+    ai: {
+      ...MOCK_AI,
+      scores: { clarity: 6.5, structure: 6.5, vocalVariety: 6, energy: 6, presence: 6.5, engagement: 6.5, overall: 6.3 },
+      fillers: { ...MOCK_AI.fillers, perMin: 2 + i * 0.5, total: 3 },
+      observations: opts.withObs === false ? undefined : [{ tag: "monotone", skillId: "pitch", severity: 2, incident: false, note: "Flat melody." }, { tag: "cut-off-by-timer", skillId: null, severity: 1, incident: true, note: "Timer." }],
+      topFix: { skillId: "sentence-endings", title: "Finish your sentences", why: "Cut off at the end.", how: "Land it." },
+      nextFocusSkillId: "sentence-endings",
+    },
+  }));
+}
+
+const MOCK_PROFILE: UserProfile = { uid: "u", displayName: "D", email: "", onboarded: true, createdAt: 0, streak: { count: 3, lastDate: null, best: 3 }, xp: 300, totalSessions: 5, sessionMinutes: 10, goal: "spot" };
+const UNLOCKED_ALL: Record<string, SkillState> = Object.fromEntries(["breath", "pause", "articulators", "fillers", "prep", "three-two-one", "wheel-60", "word-association", "story-formula", "posture", "eye-contact", "threading"].map((id) => [id, { id, xp: 40, level: 1, sessions: 1 }]));
+
+const coachCases = (): { name: string; profile: UserProfile; sessions: SessionDoc[] }[] => [
+  { name: "Timer cut-offs + monotone ×5, no block", profile: MOCK_PROFILE, sessions: mockHistory(5, { monotone: true }) },
+  { name: "Same, but day 2 of a fillers block, not yet improved", profile: { ...MOCK_PROFILE, focus: { skillId: "fillers", since: "2026-09-04", sessions: 1, startAvg: 6.5, startFillers: 2.5 } }, sessions: mockHistory(5, { monotone: true }) },
+  { name: "Fillers block that already improved (8 → 2.5)", profile: { ...MOCK_PROFILE, focus: { skillId: "fillers", since: "2026-09-04", sessions: 1, startAvg: 6.5, startFillers: 8 } }, sessions: mockHistory(5, { monotone: true }) },
+  { name: "Legacy sessions without observations, healthy pitch", profile: MOCK_PROFILE, sessions: mockHistory(4, { monotone: false, withObs: false }) },
+  { name: "Only the baseline so far", profile: MOCK_PROFILE, sessions: mockHistory(1, { monotone: true }) },
+  { name: "No sessions", profile: MOCK_PROFILE, sessions: [] },
+];
 
 const MOCK_SESSION: SessionDoc = {
   id: "mock1",
@@ -64,7 +102,7 @@ export default function Preview() {
   if (process.env.NODE_ENV === "production") notFound();
   const [tab, setTab] = useState("vero");
   const [boom, setBoom] = useState(0);
-  const tabs = ["vero", "feedback", "record", "progress", "skills", "wheel"];
+  const tabs = ["coach", "vero", "feedback", "record", "progress", "skills", "wheel"];
   return (
     <div className="max-w-[720px] mx-auto px-5 py-8">
       <div className="flex gap-4 mb-8">
@@ -102,7 +140,24 @@ export default function Preview() {
           <Confetti key={boom} fire={boom > 0} />
         </div>
       )}
-      {tab === "feedback" && <FeedbackView session={MOCK_SESSION} previous={MOCK_PREV} xpEarned={84} streak={4} nextDrillName="One breath, one sentence" showTapeLink />}
+      {tab === "coach" && (
+        <ol className="divide-y divide-line border-t border-line">
+          {coachCases().map((c) => {
+            const d = decideFocus({ profile: c.profile, sessions: c.sessions, skills: UNLOCKED_ALL });
+            return (
+              <li key={c.name} className="py-4" data-case={c.name} data-skill={d.skillId} data-kind={d.evidence.kind}>
+                <p className="label">{c.name}</p>
+                <p className="font-display text-[22px] mt-1">{d.skillId}</p>
+                <p className="text-[14px] text-ink-2">{d.reason}</p>
+                <p className="text-[11px] text-ink-3 num">{JSON.stringify(d.evidence)}</p>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {tab === "feedback" && (
+        <FeedbackView session={{ ...MOCK_SESSION, coach: { skillId: "pitch", reason: "Monotone in 4 of your last 5 sessions.", evidence: { kind: "pattern", tag: "monotone", count: 4, of: 5 } } }} previous={MOCK_PREV} previousSessions={mockHistory(5, { monotone: true })} average={averageScores(mockHistory(5, { monotone: true }))} xpEarned={84} streak={4} nextDrillName="One breath, one sentence" showTapeLink />
+      )}
       {tab === "record" && (
         <div className="-mx-5">
           <div className="px-5">
