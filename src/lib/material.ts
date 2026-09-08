@@ -11,6 +11,8 @@ import {
   randomPassage,
 } from "@/content/passages";
 import { ABSTRACT_WORDS, ASSOCIATION_WORDS, OBJECTS, TOPICS, pickMany, pickTopic } from "@/content/topics";
+import { CASE_MAP, loadCustomCase, pickCase, type RoleplayCase } from "@/content/cases";
+import { PRACTICE_PROBES } from "@/content/roleplay";
 
 export interface SessionMaterial {
   /** The headline prompt shown to the user and sent to Vero */
@@ -28,6 +30,8 @@ export interface SessionMaterial {
   itemPrefix?: string;
   paragraph?: string;
   line?: string;
+  /** DECA / FBLA case for role-play drills */
+  roleplayCase?: RoleplayCase;
 }
 
 /** Drills whose recording is split into timed segments with on-screen labels. */
@@ -38,7 +42,23 @@ const SEGMENTS: Record<string, { labels: string[]; sec: number }> = {
   "m-open-close": { labels: ["The opening", "The closing"], sec: 30 },
 };
 
-export function buildMaterial(drill: Drill, recentPrompts: string[] = []): SessionMaterial {
+export interface MaterialOptions {
+  /** Force a specific case id ("custom" = the pasted case in sessionStorage) */
+  caseId?: string;
+  /** Recently used case ids, avoided when picking */
+  excludeCases?: string[];
+  /** Narrow the random pick */
+  filter?: { org?: "DECA" | "FBLA"; event?: string };
+}
+
+function resolveCase(set: string | undefined, opts: MaterialOptions): RoleplayCase | undefined {
+  if (opts.caseId === "custom") return loadCustomCase() ?? undefined;
+  if (opts.caseId && CASE_MAP[opts.caseId]) return CASE_MAP[opts.caseId];
+  const picked = pickCase({ set: set ?? "deca", org: opts.filter?.org, event: opts.filter?.event, exclude: opts.excludeCases });
+  return picked ?? pickCase({ set: set ?? "deca", exclude: opts.excludeCases });
+}
+
+export function buildMaterial(drill: Drill, recentPrompts: string[] = [], opts: MaterialOptions = {}): SessionMaterial {
   const m = drill.material;
   const out: SessionMaterial = {};
   switch (m.kind) {
@@ -125,6 +145,32 @@ export function buildMaterial(drill: Drill, recentPrompts: string[] = []): Sessi
       out.prompt = `You are the world's leading expert on ${topic}`;
       out.promptExtra = pickMany(EXPERT_QUESTIONS, m.count ?? 3);
       out.segmentSec = m.intervalSec ?? 30;
+      break;
+    }
+    case "case": {
+      const c = resolveCase(m.set, opts);
+      if (!c) break;
+      out.roleplayCase = c;
+      out.prompt = c.title;
+      if (m.count && m.intervalSec) {
+        // Segmented drills: judge questions only, or one indicator per segment.
+        if (drill.id === "m-rp-qa") {
+          const qs = [...c.questions, ...PRACTICE_PROBES[c.org]].slice(0, m.count);
+          out.promptExtra = qs;
+        } else {
+          out.promptExtra = c.pis.slice(0, m.count);
+        }
+        out.segmentSec = m.intervalSec;
+      }
+      break;
+    }
+    case "pis": {
+      const c = resolveCase("any", opts);
+      if (!c) break;
+      out.roleplayCase = c;
+      out.items = pickMany(c.pis, Math.min(m.count ?? 5, c.pis.length));
+      out.itemInterval = m.intervalSec ?? 25;
+      out.itemPrefix = "";
       break;
     }
     case "none":

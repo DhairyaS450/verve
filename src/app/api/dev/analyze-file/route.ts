@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { readFile } from "node:fs/promises";
 import { analyzeMedia } from "@/lib/server/gemini";
+import { CASE_MAP } from "@/content/cases";
+import { bandNamesFor, rubricFor } from "@/content/roleplay";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -8,24 +10,43 @@ export const maxDuration = 300;
 /** Development only: run the Vero pipeline on a local file with a synthetic history. */
 export async function POST(req: Request) {
   if (process.env.NODE_ENV === "production") return NextResponse.json({ error: "not_found" }, { status: 404 });
-  const { path, mimeType, drillId = "m-321", durationSec = 60, endedBy = "timer" } = (await req.json()) as {
+  const { path, mimeType, drillId = "m-321", durationSec = 60, endedBy = "timer", caseId } = (await req.json()) as {
     path: string;
     mimeType: string;
     drillId?: string;
     durationSec?: number;
     endedBy?: "timer" | "user";
+    caseId?: string;
   };
   const started = Date.now();
+  const c = caseId ? CASE_MAP[caseId] : undefined;
   try {
     const bytes = await readFile(path);
     const analysis = await analyzeMedia(bytes, mimeType, {
       drillId,
       kind: "daily",
-      prompt: "Traffic cone",
-      focusSkillId: "fillers",
-      frameworkId: "three-two-one",
+      prompt: c ? c.title : "Traffic cone",
+      focusSkillId: c ? "rp-pis" : "fillers",
+      frameworkId: c ? undefined : "three-two-one",
       durationSec,
       endedBy,
+      roleplay: c
+        ? {
+            org: c.org,
+            category: c.category,
+            formatName: "DECA Individual Series",
+            prepMinutes: 10,
+            presentMinutes: 10,
+            role: c.role,
+            judgeRole: c.judgeRole,
+            situation: c.situation,
+            ask: c.ask,
+            pis: c.pis,
+            questionsAsked: c.questions.slice(0, 1).map((q) => ({ t: 40, q })),
+            rubric: rubricFor(c.category, c.pis).map((r) => ({ id: r.id, label: r.label, max: r.max, bands: r.bands })),
+            bandNames: [...bandNamesFor(c.category)],
+          }
+        : undefined,
       displayName: "Dhairya",
       audio: {
         durationSec,

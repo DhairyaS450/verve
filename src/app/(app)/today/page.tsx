@@ -107,9 +107,15 @@ export default function TodayPage() {
               <Link href="/practice?kind=daily" className="btn-accent btn-block md:w-auto md:min-w-[260px] text-[16px] min-h-[64px]">
                 Start · {total} min
               </Link>
-              <Link href="/skills" className="text-[13px] text-ink-2 underline underline-offset-4 md:ml-4">
-                Or pick a drill yourself
-              </Link>
+              <span className="text-[13px] text-ink-2 md:ml-4">
+                <Link href="/skills" className="underline underline-offset-4">
+                  Or pick a drill yourself
+                </Link>
+                <span className="text-ink-3"> · </span>
+                <Link href="/roleplay" className="underline underline-offset-4">
+                  Roleplay prep
+                </Link>
+              </span>
             </div>
           </>
         ) : (

@@ -20,7 +20,10 @@ import { averageScores, decideFocus } from "@/lib/coach";
 import { buildPlan, planBlocks, planMinutes } from "@/lib/planner";
 import { DRILL_MAP } from "@/content/drills";
 import { SKILL_MAP } from "@/content/skills";
-import type { UserProfile } from "@/lib/types";
+import type { RubricResult, UserProfile } from "@/lib/types";
+import { CASES } from "@/content/cases";
+import { FORMATS, rubricFor } from "@/content/roleplay";
+import { CaseBrief, JudgeQuestion, PiChecklist, PrepPad, RubricView } from "@/components/Roleplay";
 
 const MOCK_AI: NonNullable<SessionDoc["ai"]> = {
   transcript: "So, um, traffic cones are, like, one of those things you never think about. Um, first, they mark danger. Second, they, uh, guide traffic. And third, you know, they're just orange. The reason I'm telling you this is...",
@@ -105,7 +108,16 @@ export default function Preview() {
   if (process.env.NODE_ENV === "production") notFound();
   const [tab, setTab] = useState("vero");
   const [boom, setBoom] = useState(0);
-  const tabs = ["plan", "coach", "vero", "feedback", "record", "progress", "skills", "wheel"];
+  const tabs = ["roleplay", "plan", "coach", "vero", "feedback", "record", "progress", "skills", "wheel"];
+  const rpCase = CASES.find((c) => c.id === "deca-sem-26-districtevent1") ?? CASES[0];
+  const mockRubric: RubricResult = {
+    org: "DECA",
+    category: "series",
+    items: rubricFor("series", rpCase.pis).map((s, i) => ({ id: s.id, label: s.label, max: s.max, points: [12, 9, 6, 11, 3, 5, 4, 5, 3, 4][i] ?? Math.round(s.max * 0.7), note: i === 2 ? "Named the theories, never applied them to fans." : "" })),
+    total: 62,
+    max: 100,
+    missed: [rpCase.pis[4]],
+  };
   return (
     <div className="max-w-[720px] mx-auto px-5 py-8">
       <div className="flex gap-4 mb-8">
@@ -141,6 +153,17 @@ export default function Preview() {
             Fire confetti
           </button>
           <Confetti key={boom} fire={boom > 0} />
+        </div>
+      )}
+      {tab === "roleplay" && (
+        <div className="space-y-12">
+          <CaseBrief c={rpCase} format={FORMATS["deca-series"]} />
+          <PrepPad org="DECA" value="" onChange={() => {}} className="hairline-strong pt-5" />
+          <div className="hairline-strong pt-5">
+            <PiChecklist pis={rpCase.pis} checked={[1, 2]} onToggle={() => {}} />
+            <JudgeQuestion q={rpCase.questions[0]} index={0} total={2} nextLabel="Next question" onNext={() => {}} className="mt-4" />
+          </div>
+          <RubricView rubric={mockRubric} />
         </div>
       )}
       {tab === "plan" && (

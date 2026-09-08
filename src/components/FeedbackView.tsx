@@ -7,6 +7,7 @@ import { VeroLine } from "./VeroMark";
 import { Metric, ScoreBars, fillerHint, paceHint } from "./Metrics";
 import { fmt0, fmt1 } from "@/lib/format";
 import { observationsFor, patternCountForSkill } from "@/lib/coach";
+import { RubricView } from "./Roleplay";
 
 /**
  * The verdict. One fix, one win, three numbers, six bars. Nothing else.
@@ -55,12 +56,23 @@ export function FeedbackView({
     <div className={clsx("space-y-10", className)}>
       {!hideLine && <VeroLine className="rise">{ai.oneLiner}</VeroLine>}
 
-      {/* Three numbers */}
-      <div className="grid grid-cols-3 gap-3 md:gap-4 hairline-strong pt-5 rise-1 min-w-0">
-        <Metric label="Fillers / min" value={fmt1(ai.fillers.perMin)} delta={dFill} lowerIsBetter hint={fillerHint(ai.fillers.perMin)} />
-        <Metric label="Pace" value={fmt0(ai.wpm)} unit="wpm" delta={dWpm} hint={paceHint(ai.wpm)} />
-        <Metric label="Overall" value={fmt1(ai.scores.overall)} unit="/ 10" delta={dOverall} />
-      </div>
+      {/* Judge's sheet for role-plays; otherwise the three numbers */}
+      {ai.rubric ? (
+        <>
+          <RubricView rubric={ai.rubric} className="rise-1" />
+          <div className="grid grid-cols-3 gap-3 md:gap-4 hairline pt-5 min-w-0">
+            <Metric label="Fillers / min" value={fmt1(ai.fillers.perMin)} delta={dFill} lowerIsBetter size="md" />
+            <Metric label="Pace" value={fmt0(ai.wpm)} unit="wpm" delta={dWpm} size="md" />
+            <Metric label="Length" value={session.recording ? `${Math.floor(session.recording.durationSec / 60)}:${String(Math.round(session.recording.durationSec % 60)).padStart(2, "0")}` : "–"} size="md" />
+          </div>
+        </>
+      ) : (
+        <div className="grid grid-cols-3 gap-3 md:gap-4 hairline-strong pt-5 rise-1 min-w-0">
+          <Metric label="Fillers / min" value={fmt1(ai.fillers.perMin)} delta={dFill} lowerIsBetter hint={fillerHint(ai.fillers.perMin)} />
+          <Metric label="Pace" value={fmt0(ai.wpm)} unit="wpm" delta={dWpm} hint={paceHint(ai.wpm)} />
+          <Metric label="Overall" value={fmt1(ai.scores.overall)} unit="/ 10" delta={dOverall} />
+        </div>
+      )}
 
       {/* The one fix */}
       <section className="rise-2">

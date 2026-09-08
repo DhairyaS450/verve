@@ -1,4 +1,44 @@
-export type Goal = "stage" | "spot" | "story" | "confidence";
+export type Goal = "stage" | "spot" | "story" | "confidence" | "roleplay";
+
+/** A DECA / FBLA role-play attached to a session. Small enough to live on the session doc. */
+export interface SessionRoleplay {
+  org: "DECA" | "FBLA";
+  category: "principles" | "series" | "team" | "pfl" | "fbla-individual" | "fbla-team";
+  formatId: string;
+  caseId?: string;
+  caseTitle: string;
+  event?: string;
+  role: string;
+  judgeRole: string;
+  situation: string;
+  ask: string;
+  pis: string[];
+  /** Judge questions shown on screen, with the second they appeared */
+  questionsAsked: { t: number; q: string }[];
+  /** Indicators the speaker ticked off while presenting (1-based) */
+  piChecked?: number[];
+  prepNotes?: string;
+  sourceUrl?: string;
+}
+
+export interface RubricScore {
+  id: string;
+  label: string;
+  points: number;
+  max: number;
+  /** ≤ 12 words of evidence */
+  note: string;
+}
+
+export interface RubricResult {
+  org: "DECA" | "FBLA";
+  category: SessionRoleplay["category"];
+  items: RubricScore[];
+  total: number;
+  max: number;
+  /** Performance indicators never addressed */
+  missed: string[];
+}
 
 export interface Streak {
   count: number;
@@ -116,6 +156,8 @@ export interface VeroAnalysis {
   framework?: { followed: boolean; missing: string[] };
   moments: Moment[];
   observations?: Observation[];
+  /** Present for role-play sessions: the judge's score sheet */
+  rubric?: RubricResult;
   nextFocusSkillId: string;
   oneLiner: string;
   model: string;
@@ -147,6 +189,7 @@ export interface SessionDoc {
   frameworkId?: string;
   prompt?: string;
   promptExtra?: string[];
+  roleplay?: SessionRoleplay;
   recording?: {
     driveFileId: string;
     mimeType: string;

@@ -36,6 +36,9 @@ export default function SkillsPage() {
         </div>
         <h1 className="font-display font-medium text-[36px] md:text-[56px] leading-[0.98] tracking-[-0.035em] mt-3">Zero to stage.</h1>
         <p className="mt-2 text-[14px] text-ink-2">Tap a node. Practice it whenever you like.</p>
+        <Link href="/roleplay" className="mt-4 inline-flex items-center gap-2 label-ink min-h-[44px]">
+          Roleplay prep <span className="text-ink-3">· DECA and FBLA cases, judged</span>
+        </Link>
         <div className="mt-8">
           <SkillTree skills={skills} selectedId={selected?.id} focusId={profile?.focusSkillId} onSelect={setSelected} />
         </div>

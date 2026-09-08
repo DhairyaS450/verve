@@ -10,6 +10,7 @@ export const BRANCHES: Branch[] = [
   { id: "engagement", name: "Engagement", tagline: "Analogies, rhetoric, persuasion.", order: 7 },
   { id: "conversation", name: "Conversation", tagline: "Threads, questions, listening.", order: 8 },
   { id: "stage", name: "Stage", tagline: "From a toast to a keynote.", order: 9 },
+  { id: "roleplay", name: "Roleplay", tagline: "DECA and FBLA cases, judged.", order: 10 },
 ];
 
 export const SKILLS: Skill[] = [
@@ -110,6 +111,18 @@ export const SKILLS: Skill[] = [
   { id: "five-minute-talk", branch: "stage", tier: 4, prereqs: ["talk-131", "gestures"], name: "Five-minute talk", blurb: "A full talk with body and voice.", cue: "Own the space. Own the pauses." },
   { id: "keynote", branch: "stage", tier: 5, prereqs: ["five-minute-talk", "vocal-archetypes", "story-bank"], name: "Ten-minute keynote", blurb: "Stories, structure, and stage.", cue: "Friend, Motivator, Educator, Coach, Friend." },
   { id: "signature-talk", branch: "stage", tier: 5, prereqs: ["keynote", "executive-presence", "callbacks"], name: "Signature talk", blurb: "The talk you could give tomorrow, anywhere.", cue: "This is who you are on stage." },
+
+  // ---------------- ROLEPLAY (DECA / FBLA) ----------------
+  { id: "rp-format", branch: "roleplay", tier: 1, prereqs: [], name: "Know the room", blurb: "Greeting, roles, the ask, the clock.", cue: "Name, role, handshake. Confirm the ask." },
+  { id: "rp-pis", branch: "roleplay", tier: 1, prereqs: [], name: "Hit every indicator", blurb: "Say it, define it, apply it. All of them.", cue: "Name the indicator out loud before you cover it." },
+  { id: "rp-structure", branch: "roleplay", tier: 2, prereqs: ["rp-format"], name: "Roleplay structure", blurb: "Open, restate, analyse, recommend, close.", cue: "Recommendation in one sentence, early." },
+  { id: "rp-vocab", branch: "roleplay", tier: 2, prereqs: ["rp-pis"], name: "Business vocabulary", blurb: "Sound like the role you're playing.", cue: "Use the industry's words, not yours." },
+  { id: "rp-qa", branch: "roleplay", tier: 2, prereqs: ["rp-format"], name: "Judge questions", blurb: "Answer, support, stop.", cue: "Answer the question asked. Then stop." },
+  { id: "rp-fbla", branch: "roleplay", tier: 2, prereqs: ["rp-format"], name: "FBLA case format", blurb: "Alternatives, pros and cons, implementation.", cue: "Two alternatives with pros and cons, then pick." },
+  { id: "rp-numbers", branch: "roleplay", tier: 3, prereqs: ["rp-structure"], name: "Specifics", blurb: "Who, when, how much, how measured.", cue: "Every idea gets a number or a date." },
+  { id: "rp-time", branch: "roleplay", tier: 3, prereqs: ["rp-structure"], name: "Use the clock", blurb: "Five to eight minutes. No dead air.", cue: "One minute per indicator. Leave time for questions." },
+  { id: "rp-exceeds", branch: "roleplay", tier: 4, prereqs: ["rp-numbers", "rp-qa", "rp-vocab"], name: "Exceeds expectations", blurb: "Top 10% of business people doing this task.", cue: "Original, practical, effective. All three." },
+  { id: "rp-team", branch: "roleplay", tier: 4, prereqs: ["rp-structure"], name: "Team case", blurb: "30 minutes prep, 15 with the judge.", cue: "Divide the indicators. Hand off cleanly." },
 ];
 
 export const SKILL_MAP: Record<string, Skill> = Object.fromEntries(SKILLS.map((s) => [s.id, s]));

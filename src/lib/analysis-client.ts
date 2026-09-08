@@ -8,6 +8,7 @@ import type { AudioMetrics, SessionDoc, SkillState, UserProfile, VeroAnalysis } 
 import { isNewDrill } from "./planner";
 import { firstName } from "./format";
 import { historyForPrompt } from "./coach";
+import { FORMATS, bandNamesFor, rubricFor } from "@/content/roleplay";
 
 export async function uploadRecording(opts: {
   profile: UserProfile;
@@ -63,6 +64,23 @@ export async function analyzeSession(opts: {
         audio: audio ?? session.audio,
         endedBy: session.endedBy,
         history,
+        roleplay: session.roleplay
+          ? {
+              org: session.roleplay.org,
+              category: session.roleplay.category,
+              formatName: FORMATS[session.roleplay.formatId]?.name ?? session.roleplay.formatId,
+              prepMinutes: Math.round((FORMATS[session.roleplay.formatId]?.prepSeconds ?? 600) / 60),
+              presentMinutes: Math.round((FORMATS[session.roleplay.formatId]?.presentSeconds ?? 600) / 60),
+              role: session.roleplay.role,
+              judgeRole: session.roleplay.judgeRole,
+              situation: session.roleplay.situation,
+              ask: session.roleplay.ask,
+              pis: session.roleplay.pis,
+              questionsAsked: session.roleplay.questionsAsked,
+              rubric: rubricFor(session.roleplay.category, session.roleplay.pis).map((r) => ({ id: r.id, label: r.label, max: r.max, bands: r.bands })),
+              bandNames: [...bandNamesFor(session.roleplay.category)],
+            }
+          : undefined,
         previous: previous?.ai
           ? {
               topFixTitle: previous.ai.topFix.title,

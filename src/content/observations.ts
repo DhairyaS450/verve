@@ -54,6 +54,18 @@ export const OBSERVATION_TAGS: ObservationTag[] = [
   { tag: "no-analogy", label: "No analogy", dimension: "engagement", skillId: "analogies", hint: "abstract explanation, nothing familiar to hold on to" },
   { tag: "generic", label: "Generic content", dimension: "engagement", skillId: "so-what", hint: "true but obvious; no 'so what' for the listener" },
   { tag: "no-questions", label: "No questions asked", dimension: "engagement", skillId: "rhetorical-questions", hint: "never invites the listener to think" },
+  // roleplay (DECA / FBLA)
+  { tag: "pi-missed", label: "Indicator skipped", dimension: "structure", skillId: "rp-pis", hint: "a listed performance indicator was never addressed" },
+  { tag: "pi-shallow", label: "Indicator not applied", dimension: "structure", skillId: "rp-pis", hint: "indicator named but not defined or applied to the case" },
+  { tag: "no-greeting", label: "Weak greeting", dimension: "presence", skillId: "rp-format", hint: "no professional greeting, name, role or confirmation of the ask" },
+  { tag: "no-recommendation", label: "No clear recommendation", dimension: "structure", skillId: "rp-structure", hint: "analysis without a decision the judge could act on" },
+  { tag: "no-close", label: "No close", dimension: "structure", skillId: "rp-structure", hint: "no summary, no invitation for questions, no thank-you" },
+  { tag: "vague-plan", label: "Vague implementation", dimension: "structure", skillId: "rp-numbers", hint: "no who, when, cost or measure" },
+  { tag: "weak-qa", label: "Weak on judge questions", dimension: "engagement", skillId: "rp-qa", hint: "rambling, evasive or thin answers to judge questions" },
+  { tag: "no-business-vocab", label: "Casual language", dimension: "engagement", skillId: "rp-vocab", hint: "no industry or business terminology for the role" },
+  { tag: "ran-short", label: "Ran short", dimension: "structure", skillId: "rp-time", hint: "finished well under the expected length with indicators left thin" },
+  { tag: "ran-long", label: "Ran long", dimension: "structure", skillId: "rp-time", hint: "still talking at the time limit; no room for questions" },
+  { tag: "no-alternatives", label: "No alternatives weighed", dimension: "structure", skillId: "rp-fbla", hint: "FBLA: one option only, no pros and cons" },
   // incidents (situational; never become a focus)
   { tag: "cut-off-by-timer", label: "Cut off by timer", dimension: "incident", skillId: null, hint: "the clock ended the recording mid-sentence; not a habit" },
   { tag: "lost-train", label: "Lost train of thought", dimension: "incident", skillId: "wheel-60", hint: "a single blank moment; mark incident unless it recurs" },

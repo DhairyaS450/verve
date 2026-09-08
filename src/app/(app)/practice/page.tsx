@@ -13,12 +13,14 @@ import { LiveAudioAnalyzer } from "@/lib/audio/analyzer";
 import { Recorder, getSessionStream, stopStream } from "@/lib/recorder";
 import { DriveNotConnected, ensureFolder, getAccessToken } from "@/lib/drive";
 import { analyzeSession, uploadRecording } from "@/lib/analysis-client";
-import type { AudioMetrics, PlanDoc, SessionDoc, SkillState, UserProfile } from "@/lib/types";
+import type { AudioMetrics, PlanDoc, SessionDoc, SessionRoleplay, SkillState, UserProfile } from "@/lib/types";
 import { DRILL_MAP } from "@/content/drills";
 import { SKILL_MAP } from "@/content/skills";
 import { FRAMEWORK_MAP } from "@/content/frameworks";
 import type { Drill, Framework } from "@/content/types";
 import { VERO, pick } from "@/content/vero";
+import { FORMATS, PRACTICE_PROBES, formatForCategory, type RoleplayFormat } from "@/content/roleplay";
+import type { RoleplayCase } from "@/content/cases";
 import { VeroLine, VeroMark } from "@/components/VeroMark";
 import { Vero } from "@/components/Vero";
 import { Confetti } from "@/components/Confetti";
@@ -32,6 +34,7 @@ import { FrameworkStrip } from "@/components/FrameworkStrip";
 import { BigLine, PassageBlock, Ticker, TwisterList } from "@/components/WarmupMaterial";
 import { FeedbackView } from "@/components/FeedbackView";
 import { Notes } from "@/components/Transcript";
+import { CaseBrief, JudgeQuestion, PiChecklist, PrepPad } from "@/components/Roleplay";
 import { localDateStr, mmss } from "@/lib/format";
 import { liveStreak } from "@/lib/xp";
 
@@ -61,7 +64,26 @@ const CHIPS = ["Rambled", "Too fast", "Too many ums", "Lost the structure", "Str
 /** Seconds past the drill's time to finish a sentence before the hard stop. */
 const GRACE = 5;
 const RESPINS = 2;
-const RESPIN_KINDS = new Set(["topic", "object", "question", "story-prompt", "expert", "statements"]);
+const RESPIN_KINDS = new Set(["topic", "object", "question", "story-prompt", "expert", "statements", "case"]);
+/** Drills that are judged on the official rubric. */
+const SIM_DRILLS = new Set(["m-rp-deca", "m-rp-quick", "m-rp-fbla", "m-rp-fbla-quick", "m-rp-deca-team"]);
+const EMPTY_AUDIO: AudioMetrics = { durationSec: 0, speakingRatio: 0, pauseCount: 0, longestPauseSec: 0, meanPauseSec: 0, pitchMedianHz: 0, pitchSpreadSemitones: 0, varietyScore: 0, volumeMeanDb: 0, volumeRangeDb: 0, monotone: false, envelope: [] };
+
+/** Which official format governs a role-play drill for this case. Quick drills keep the case's rubric. */
+function formatFor(drill: Drill, c: RoleplayCase): RoleplayFormat {
+  if (drill.id === "m-rp-deca-team") return FORMATS["deca-team"];
+  const base = formatForCategory(c.category);
+  if (drill.id === "m-rp-quick") return { ...FORMATS.quick, category: c.category, org: c.org, questions: "end" };
+  if (drill.id === "m-rp-fbla-quick") return { ...FORMATS.quick, id: "quick", org: "FBLA", category: c.category, questions: "during", questionAt: [90, 170], note: "Verve's short form: same rubric, faster clock, judges interrupt." };
+  return base;
+}
+
+function judgeQuestionsFor(c: RoleplayCase, drill: Drill, fmt: RoleplayFormat): { qs: string[]; practice: boolean } {
+  const practice = c.questions.length === 0;
+  const pool = practice ? PRACTICE_PROBES[c.org] : c.questions;
+  const n = drill.id.includes("quick") ? 1 : fmt.questions === "during" ? Math.min(2, fmt.questionAt?.length ?? 2) : Math.min(3, pool.length);
+  return { qs: pool.slice(0, Math.max(1, n)), practice };
+}
 
 function PracticeFlow() {
   const { profile } = useAuth();
@@ -69,6 +91,11 @@ function PracticeFlow() {
   const params = useSearchParams();
   const kind = (params.get("kind") ?? "daily") as Kind;
   const forceDrill = params.get("drill") ?? undefined;
+  const caseParam = params.get("case") ?? undefined;
+  const caseFilter = useMemo(
+    () => ({ org: (params.get("org") as "DECA" | "FBLA" | null) ?? undefined, event: params.get("event") ?? undefined }),
+    [params],
+  );
 
   const [phase, setPhaseState] = useState<Phase>("loading");
   const phaseRef = useRef<Phase>("loading");
@@ -87,6 +114,7 @@ function PracticeFlow() {
   const sessionsRef = useRef<SessionDoc[]>([]);
   const skillsRef = useRef<Record<string, SkillState>>({});
   const profileRef = useRef<UserProfile | null>(null);
+  const [latestProfile, setLatestProfile] = useState<UserProfile | null>(null);
 
   const [runs, setRuns] = useState<Run[]>([]);
   const runsRef = useRef<Run[]>([]);
@@ -106,6 +134,7 @@ function PracticeFlow() {
   const [respins, setRespins] = useState(0);
   const [wheelKey, setWheelKey] = useState(0);
   const [recentPrompts, setRecentPrompts] = useState<string[]>([]);
+  const [usedCases, setUsedCases] = useState<string[]>([]);
   const endedByRef = useRef<"timer" | "user">("user");
   const [elapsed, setElapsed] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -114,7 +143,14 @@ function PracticeFlow() {
   const [tickerDone, setTickerDone] = useState(false);
   const [veroLine, setVeroLine] = useState(VERO.analyzing[0]);
   const [notes, setNotes] = useState("");
-  const [latestProfile, setLatestProfile] = useState<UserProfile | null>(null);
+
+  // Role-play state (per block)
+  const [prepNotes, setPrepNotes] = useState("");
+  const [piChecked, setPiChecked] = useState<number[]>([]);
+  const askedRef = useRef<{ t: number; q: string }[]>([]);
+  const [askedCount, setAskedCount] = useState(0);
+  const [judgeQ, setJudgeQ] = useState<number | null>(null);
+  const [qaOpen, setQaOpen] = useState(false);
 
   const warmup: Drill | undefined = plan && kind === "daily" ? DRILL_MAP[plan.warmupId] : undefined;
   const block = blocks[bi];
@@ -122,6 +158,10 @@ function PracticeFlow() {
   const framework = block?.framework;
   const focus = block ? SKILL_MAP[block.focusSkillId] : undefined;
   const material = materials[bi];
+  const rpCase = material?.roleplayCase;
+  const isSim = Boolean(drill && rpCase && SIM_DRILLS.has(drill.id));
+  const rpFormat = drill && rpCase ? formatFor(drill, rpCase) : undefined;
+  const judgeQs = drill && rpCase && rpFormat ? judgeQuestionsFor(rpCase, drill, rpFormat) : null;
   const previous = useMemo(() => sessions.find((s) => s.status === "analyzed" && s.ai) ?? null, [sessions]);
   const multi = blocks.length > 1;
 
@@ -157,13 +197,16 @@ function PracticeFlow() {
           return { drill: d, focusSkillId: b.focusSkillId, reason: b.reason, framework: d.frameworkId ? FRAMEWORK_MAP[d.frameworkId] : undefined };
         });
         let rp = ss.slice(0, 20).map((s) => s.prompt ?? "").filter(Boolean);
+        const used = ss.map((s) => s.roleplay?.caseId ?? "").filter(Boolean);
         const mats: SessionMaterial[] = [];
         for (const b of blks) {
-          const m = buildMaterial(b.drill, rp);
+          const m = buildMaterial(b.drill, rp, { caseId: caseParam, excludeCases: used, filter: caseFilter });
           mats.push(m);
           if (m.prompt) rp = [...rp, m.prompt];
+          if (m.roleplayCase) used.push(m.roleplayCase.id);
         }
         setRecentPrompts(rp);
+        setUsedCases(used);
         setSessions(ss);
         sessionsRef.current = ss;
         skillsRef.current = sk;
@@ -184,7 +227,7 @@ function PracticeFlow() {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.uid, kind, forceDrill]);
+  }, [profile?.uid, kind, forceDrill, caseParam]);
 
   // Drive readiness check (non-blocking)
   useEffect(() => {
@@ -259,13 +302,16 @@ function PracticeFlow() {
   };
 
   // ---------------------------------------------------------------- pipeline (per block)
-  const updateRun = useCallback((i: number, patch: Partial<Run>) => {
-    const next = [...runsRef.current];
-    next[i] = { ...next[i], ...patch };
-    runsRef.current = next;
-    setRuns(next);
-    if (phaseRef.current === "review" && next.length > 0 && next.every((r) => r.stage === "done")) go("feedback");
-  }, [go]);
+  const updateRun = useCallback(
+    (i: number, patch: Partial<Run>) => {
+      const next = [...runsRef.current];
+      next[i] = { ...next[i], ...patch };
+      runsRef.current = next;
+      setRuns(next);
+      if (phaseRef.current === "review" && next.length > 0 && next.every((r) => r.stage === "done")) go("feedback");
+    },
+    [go],
+  );
 
   const startPipeline = useCallback(
     (i: number, run: Run, skipUpload = false) => {
@@ -276,7 +322,7 @@ function PracticeFlow() {
           let withRec: SessionDoc = run.session;
           if (!skipUpload || !run.session.recording) {
             updateRun(i, { stage: "uploading", uploadPct: 0, error: undefined });
-            await patchSession(prof.uid, run.session.id, { audio: run.audio, endedBy: run.session.endedBy, status: "uploading" });
+            await patchSession(prof.uid, run.session.id, { audio: run.audio, endedBy: run.session.endedBy, roleplay: run.session.roleplay, status: "uploading" });
             const recording = await uploadRecording({
               profile: prof,
               session: run.session,
@@ -288,7 +334,6 @@ function PracticeFlow() {
             withRec = { ...run.session, audio: run.audio, recording };
           }
           updateRun(i, { session: withRec, stage: "analyzing", error: undefined });
-          // Earlier blocks must finish first so this one sees them as history.
           if (i > 0) await pipelines.current[i - 1]?.catch(() => {});
           const earlier = runsRef.current
             .slice(0, i)
@@ -324,6 +369,10 @@ function PracticeFlow() {
     go("record");
     setElapsed(0);
     setRecording(false);
+    askedRef.current = [];
+    setAskedCount(0);
+    setJudgeQ(null);
+    setQaOpen(false);
     let n = 3;
     setCountdown(n);
     const iv = setInterval(() => {
@@ -342,6 +391,27 @@ function PracticeFlow() {
         rec.start();
         setRecording(true);
         endedByRef.current = "user";
+        const c = material?.roleplayCase;
+        const fmt = c ? formatFor(drill, c) : undefined;
+        const roleplay: SessionRoleplay | undefined =
+          c && fmt && SIM_DRILLS.has(drill.id)
+            ? {
+                org: c.org,
+                category: c.category,
+                formatId: fmt.id,
+                caseId: c.custom ? undefined : c.id,
+                caseTitle: c.title,
+                event: c.event,
+                role: c.role,
+                judgeRole: c.judgeRole,
+                situation: c.situation,
+                ask: c.ask,
+                pis: c.pis,
+                questionsAsked: [],
+                prepNotes: prepNotes.trim() || undefined,
+                sourceUrl: c.source.url || undefined,
+              }
+            : undefined;
         const doc: SessionDoc = {
           id: newSessionId(),
           uid: profile.uid,
@@ -358,9 +428,10 @@ function PracticeFlow() {
           frameworkId: drill.frameworkId,
           prompt: material?.prompt,
           promptExtra: material?.promptExtra,
+          roleplay,
           status: "recording",
         };
-        const run: Run = { session: doc, stage: "uploading", uploadPct: 0, blob: new Blob(), mimeType: "", durationSec: 0, audio: { durationSec: 0, speakingRatio: 0, pauseCount: 0, longestPauseSec: 0, meanPauseSec: 0, pitchMedianHz: 0, pitchSpreadSemitones: 0, varietyScore: 0, volumeMeanDb: 0, volumeRangeDb: 0, monotone: false, envelope: [] } };
+        const run: Run = { session: doc, stage: "uploading", uploadPct: 0, blob: new Blob(), mimeType: "", durationSec: 0, audio: EMPTY_AUDIO };
         const next = [...runsRef.current];
         next[bi] = run;
         runsRef.current = next;
@@ -368,7 +439,7 @@ function PracticeFlow() {
         saveSession(profile.uid, doc).catch(console.error);
       } else setCountdown(n);
     }, 1000);
-  }, [drill, profile, plan, block, kind, warmup, material, bi, blocks.length, go]);
+  }, [drill, profile, plan, block, kind, warmup, material, bi, blocks.length, go, prepNotes]);
 
   const stopRecording = useCallback(async () => {
     const rec = recorderRef.current;
@@ -384,7 +455,8 @@ function PracticeFlow() {
       const i = bi;
       const existing = runsRef.current[i];
       if (!existing) return;
-      const run: Run = { ...existing, blob, mimeType, durationSec, audio, session: { ...existing.session, endedBy: endedByRef.current } };
+      const roleplay = existing.session.roleplay ? { ...existing.session.roleplay, questionsAsked: askedRef.current, piChecked: piChecked.length ? piChecked : undefined } : undefined;
+      const run: Run = { ...existing, blob, mimeType, durationSec, audio, session: { ...existing.session, endedBy: endedByRef.current, roleplay } };
       const next = [...runsRef.current];
       next[i] = run;
       runsRef.current = next;
@@ -396,6 +468,8 @@ function PracticeFlow() {
         setWheelDone(false);
         setTickerDone(false);
         setRespins(0);
+        setPrepNotes("");
+        setPiChecked([]);
         setWheelKey((k) => k + 1);
         go("brief");
       } else {
@@ -414,7 +488,7 @@ function PracticeFlow() {
       setError("Recording failed. Try again.");
       go("error");
     }
-  }, [profile, displayAnalyzer, bi, blocks.length, startPipeline, go]);
+  }, [profile, displayAnalyzer, bi, blocks.length, startPipeline, go, piChecked]);
 
   // Elapsed ticker for warmup and prep; prep auto-advances into recording.
   useEffect(() => {
@@ -429,12 +503,21 @@ function PracticeFlow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // Recording clock + hard stop after the grace period
+  // Recording clock + hard stop after the grace period; FBLA-style judge interruptions.
   useEffect(() => {
     if (phase !== "record" || !recording || !drill) return;
     const t = setInterval(() => {
       const e = recorderRef.current?.elapsed ?? 0;
       setElapsed(e);
+      if (isSim && rpFormat?.questions === "during" && judgeQs) {
+        const at = rpFormat.questionAt ?? [];
+        const k = askedRef.current.length;
+        if (k < judgeQs.qs.length && k < at.length && e >= at[k]) {
+          askedRef.current.push({ t: Math.round(e), q: judgeQs.qs[k] });
+          setAskedCount(askedRef.current.length);
+          setJudgeQ(k);
+        }
+      }
       if (e >= (drill.speakSeconds ?? 60) + GRACE) {
         endedByRef.current = "timer";
         stopRecording();
@@ -443,6 +526,16 @@ function PracticeFlow() {
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, recording]);
+
+  const askNext = () => {
+    if (!judgeQs) return;
+    const k = askedRef.current.length;
+    if (k >= judgeQs.qs.length) return;
+    askedRef.current.push({ t: Math.round(recorderRef.current?.elapsed ?? elapsed), q: judgeQs.qs[k] });
+    setAskedCount(askedRef.current.length);
+    setJudgeQ(k);
+    setQaOpen(true);
+  };
 
   const retry = (i: number) => {
     const run = runsRef.current[i];
@@ -470,7 +563,9 @@ function PracticeFlow() {
     if (!drill || !material || respins >= RESPINS) return;
     const exclude = [...recentPrompts, material.prompt ?? ""].filter(Boolean);
     setRecentPrompts(exclude);
-    const m = buildMaterial(drill, exclude);
+    const excludeCases = [...usedCases, material.roleplayCase?.id ?? ""].filter(Boolean);
+    setUsedCases(excludeCases);
+    const m = buildMaterial(drill, exclude, { excludeCases, filter: caseFilter });
     setMaterials((ms) => ms.map((x, i) => (i === bi ? m : x)));
     setWheelDone(false);
     setWheelKey((k) => k + 1);
@@ -512,7 +607,10 @@ function PracticeFlow() {
 
   /** Status of earlier blocks while the next one is being recorded. */
   const backgroundStatus = () => {
-    const earlier = runs.slice(0, bi).map((r, i) => ({ r, i })).filter((x) => x.r && x.r.durationSec > 0);
+    const earlier = runs
+      .slice(0, bi)
+      .map((r, i) => ({ r, i }))
+      .filter((x) => x.r && x.r.durationSec > 0);
     if (!earlier.length || phase === "review" || phase === "feedback") return null;
     return (
       <ul className="mt-3 space-y-1">
@@ -561,9 +659,9 @@ function PracticeFlow() {
         label: multi ? `Drill ${i + 1} · ${SKILL_MAP[b.focusSkillId]?.name ?? ""}` : "Drill",
         title: b.drill.name,
         minutes: `${b.drill.minutes} min`,
-        sub: multi && i > 0 ? b.reason : undefined,
+        sub: multi && i > 0 ? b.reason : materials[i]?.roleplayCase ? `${materials[i].roleplayCase!.org} · ${materials[i].roleplayCase!.event}` : undefined,
       })),
-      { label: "Review", title: "Vero reviews the tape", minutes: "~1 min" },
+      { label: "Review", title: isSim ? "Vero judges it on the official rubric" : "Vero reviews the tape", minutes: "~1 min" },
     ];
     return (
       <div className="max-w-[640px] pb-12">
@@ -667,7 +765,7 @@ function PracticeFlow() {
     const hasPrep = (drill.prepSeconds ?? 0) > 5;
     return (
       <div className="max-w-[720px] pb-12">
-        {header(multi ? `Drill ${bi + 1} of ${blocks.length}` : "Drill")}
+        {header(multi ? `Drill ${bi + 1} of ${blocks.length}` : rpCase ? "Case" : "Drill")}
         {stepBar()}
         {backgroundStatus()}
         <div className="mt-6">
@@ -680,7 +778,9 @@ function PracticeFlow() {
           </VeroLine>
         </div>
         <div className="mt-8 hairline-strong pt-6">
-          {material.candidates && material.prompt ? (
+          {rpCase ? (
+            <CaseBrief key={wheelKey} c={rpCase} format={rpFormat} compact={!isSim} />
+          ) : material.candidates && material.prompt ? (
             <TopicWheel key={wheelKey} candidates={material.candidates} final={material.prompt} onDone={() => setWheelDone(true)} />
           ) : (
             <PromptBlock key={wheelKey} material={material} />
@@ -693,7 +793,7 @@ function PracticeFlow() {
             disabled={respins >= RESPINS || (Boolean(material.candidates) && !wheelDone)}
             onClick={respin}
           >
-            {respins >= RESPINS ? "No more spins" : "New topic"}
+            {respins >= RESPINS ? "No more spins" : rpCase ? "Different case" : "New topic"}
             {respins < RESPINS && <span className="text-ink-3">· {RESPINS - respins} left</span>}
           </button>
         )}
@@ -717,7 +817,7 @@ function PracticeFlow() {
                 go("prep");
               }}
             >
-              Prep · {mmss(drill.prepSeconds ?? 0)}
+              {rpCase ? "Start prep" : "Prep"} · {mmss(drill.prepSeconds ?? 0)}
             </button>
           ) : null}
           <button type="button" className={clsx(hasPrep ? "btn-ghost" : "btn-accent", "btn-block min-h-[60px]")} disabled={Boolean(material.candidates) && !wheelDone} onClick={startRecording}>
@@ -732,12 +832,11 @@ function PracticeFlow() {
   if (phase === "prep" && material) {
     return (
       <div className="max-w-[720px] pb-12">
-        {header("Prep")}
+        {header("Prep", <span className="num label">{mmss(Math.max(0, (drill.prepSeconds ?? 0) - elapsed))} left</span>)}
         {stepBar()}
-        <div className="mt-6">
-          <PromptBlock material={material} showParagraph />
-        </div>
+        <div className="mt-6">{rpCase ? <CaseBrief c={rpCase} format={rpFormat} /> : <PromptBlock material={material} showParagraph />}</div>
         {framework && <FrameworkStrip framework={framework} className="mt-8" />}
+        {rpCase && isSim && <PrepPad org={rpCase.org} value={prepNotes} onChange={setPrepNotes} className="mt-8 hairline-strong pt-5" />}
         <Timer seconds={elapsed} total={drill.prepSeconds ?? 0} label="Think" className="mt-10" />
         <button type="button" className="btn-accent btn-block mt-8 min-h-[60px]" onClick={startRecording}>
           I&apos;m ready · record
@@ -752,11 +851,45 @@ function PracticeFlow() {
     const minSpeak = drill.minSpeakSeconds ?? 15;
     const canStop = elapsed >= minSpeak;
     const segIdx = material.promptExtra && material.segmentSec ? Math.min(material.promptExtra.length - 1, Math.floor(elapsed / material.segmentSec)) : -1;
+    const allAsked = judgeQs ? askedCount >= judgeQs.qs.length : true;
     return (
       <div className="max-w-[720px] pb-10 -mx-5 md:mx-0">
         <div className="px-5 md:px-0">{header("Recording", <span className={clsx("label", recording ? "text-accent" : "")}>{recording ? "Live" : ""}</span>)}</div>
         <div className="px-5 md:px-0 mt-2">
-          {segIdx >= 0 && material.promptExtra ? (
+          {rpCase && isSim ? (
+            <div>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="label truncate">
+                  {rpCase.org} · {rpCase.judgeRole}
+                </span>
+                <span className="num text-[12px] text-ink-3 whitespace-nowrap">
+                  {piChecked.length}/{rpCase.pis.length} covered
+                </span>
+              </div>
+              <PiChecklist pis={rpCase.pis} checked={piChecked} onToggle={(i) => setPiChecked((c) => (c.includes(i) ? c.filter((x) => x !== i) : [...c, i]))} className="mt-2" />
+              {judgeQ !== null && judgeQs ? (
+                <JudgeQuestion
+                  q={judgeQs.qs[judgeQ]}
+                  index={judgeQ}
+                  total={judgeQs.qs.length}
+                  isPractice={judgeQs.practice}
+                  nextLabel={rpFormat?.questions === "during" ? "Back to the plan" : allAsked ? "Close and stop" : "Next question"}
+                  onNext={() => {
+                    if (rpFormat?.questions === "during") setJudgeQ(null);
+                    else if (allAsked) {
+                      endedByRef.current = "user";
+                      stopRecording();
+                    } else askNext();
+                  }}
+                  className="mt-4"
+                />
+              ) : rpFormat?.questions === "end" && recording && !qaOpen ? (
+                <button type="button" className="btn-ghost btn-sm mt-3" disabled={!canStop} onClick={askNext}>
+                  Ready for judge questions
+                </button>
+              ) : null}
+            </div>
+          ) : segIdx >= 0 && material.promptExtra ? (
             <div>
               <div className="flex items-baseline justify-between">
                 <span className="label">{material.prompt}</span>
@@ -787,7 +920,10 @@ function PracticeFlow() {
             {recording ? (canStop ? (elapsed > speak ? "Done" : "Stop") : `Keep going · ${mmss(minSpeak - elapsed)}`) : "Starting"}
           </button>
         </div>
-        <p className="px-5 md:px-0 mt-2 text-[12px] text-ink-3">Stop whenever you land the last sentence. {GRACE}s of grace after the clock.</p>
+        <p className="px-5 md:px-0 mt-2 text-[12px] text-ink-3">
+          {isSim && rpFormat ? (rpFormat.questions === "end" ? "Present, then take the judge's questions, then close. " : "Judges interrupt; answer, then get back to your plan. ") : "Stop whenever you land the last sentence. "}
+          {GRACE}s of grace after the clock.
+        </p>
         {focus && <p className="px-5 md:px-0 mt-3 text-[13px] text-ink-2">{focus.cue}</p>}
       </div>
     );
@@ -803,7 +939,7 @@ function PracticeFlow() {
         <div className="mt-8">
           <div className="flex items-center gap-5">
             <Vero pose="notes" size={112} className="shrink-0 -ml-2" />
-            <p className="font-display text-[22px] md:text-[26px] leading-tight">{runs.some((r) => r.stage === "uploading") ? pick(VERO.uploading) : veroLine}</p>
+            <p className="font-display text-[22px] md:text-[26px] leading-tight">{runs.some((r) => r.stage === "uploading") ? pick(VERO.uploading) : isSim ? "Scoring every indicator." : veroLine}</p>
           </div>
           <ul className="mt-5 space-y-3">
             {runs.map((r, i) => (
@@ -818,7 +954,7 @@ function PracticeFlow() {
                   </span>
                 </div>
                 <div className="mt-2 h-[2px] bg-paper-3">
-                  <div className={clsx("h-full transition-[width] duration-300", r.stage === "uploading" ? "bg-ink" : r.stage === "failed" ? "bg-accent" : "bg-accent")} style={{ width: r.stage === "uploading" ? `${Math.round(r.uploadPct * 100)}%` : "100%" }} />
+                  <div className={clsx("h-full transition-[width] duration-300", r.stage === "uploading" ? "bg-ink" : "bg-accent")} style={{ width: r.stage === "uploading" ? `${Math.round(r.uploadPct * 100)}%` : "100%" }} />
                 </div>
                 {r.stage === "failed" && (
                   <div className="mt-3 flex flex-col gap-2">
@@ -846,7 +982,7 @@ function PracticeFlow() {
               Skip for now
             </button>
           )}
-          {failed.length === 0 && <p className="mt-3 text-[12px] text-ink-3 num">Usually under a minute per drill.</p>}
+          {failed.length === 0 && <p className="mt-3 text-[12px] text-ink-3 num">Usually under a minute per drill. Long role-plays take a little longer.</p>}
         </div>
         <div className="mt-12 hairline-strong pt-6">
           <p className="label">While you wait</p>
@@ -876,6 +1012,10 @@ function PracticeFlow() {
     const improvedAny = runs.some((r, i) => {
       const prevAi = i === 0 ? previous?.ai : runs[i - 1].session.ai;
       const ai = r.session.ai!;
+      if (ai.rubric) {
+        const prevScore = previous?.ai?.rubric?.total;
+        return prevScore === undefined || ai.rubric.total >= prevScore;
+      }
       return !prevAi || ai.scores.overall >= prevAi.scores.overall || ai.fillers.perMin < prevAi.fillers.perMin;
     });
     const celebrate = kind === "baseline" || improvedAny;
@@ -883,7 +1023,7 @@ function PracticeFlow() {
     return (
       <div className="max-w-[720px] pb-16">
         <Confetti fire={celebrate} />
-        {header("Vero's verdict")}
+        {header(last.rubric ? "Judge's verdict" : "Vero's verdict")}
         {stepBar()}
         <div className="mt-6 grid grid-cols-[112px_1fr] md:grid-cols-[150px_1fr] gap-4 md:gap-6 items-center rise">
           <Vero pose={celebrate ? "cheer" : "perched"} size={150} className="w-[112px] h-[112px] md:w-[150px] md:h-[150px]" />
@@ -900,7 +1040,9 @@ function PracticeFlow() {
             <div key={r.session.id} className={clsx(multi && "mt-10 hairline-strong pt-6")}>
               {multi && (
                 <div className="flex items-baseline justify-between mb-2">
-                  <h2 className="font-display text-[22px] font-medium">Drill {i + 1} · {SKILL_MAP[r.session.focusSkillId ?? ""]?.name ?? ""}</h2>
+                  <h2 className="font-display text-[22px] font-medium">
+                    Drill {i + 1} · {SKILL_MAP[r.session.focusSkillId ?? ""]?.name ?? ""}
+                  </h2>
                   <span className="label">{r.session.drillName}</span>
                 </div>
               )}

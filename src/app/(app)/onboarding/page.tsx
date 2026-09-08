@@ -14,6 +14,7 @@ const GOALS: { id: Goal; title: string; blurb: string }[] = [
   { id: "story", title: "Tell better stories", blurb: "Keep a room hanging on every word." },
   { id: "stage", title: "Speak on stage", blurb: "From a toast to a keynote." },
   { id: "confidence", title: "Sound confident", blurb: "A voice people lean in to hear." },
+  { id: "roleplay", title: "Win DECA / FBLA role-plays", blurb: "Hit every indicator, own the judge questions." },
 ];
 
 export default function Onboarding() {

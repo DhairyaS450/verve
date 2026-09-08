@@ -6,7 +6,23 @@ import { SKILLS, SKILL_MAP } from "@/content/skills";
 import { FRAMEWORK_MAP } from "@/content/frameworks";
 import { DRILL_MAP } from "@/content/drills";
 import { OBSERVATION_TAGS, TAG_IDS, TAG_MAP } from "@/content/observations";
-import type { AudioMetrics, Observation, VeroAnalysis } from "../types";
+import type { AudioMetrics, Observation, RubricResult, VeroAnalysis } from "../types";
+
+export interface RoleplayForPrompt {
+  org: "DECA" | "FBLA";
+  category: RubricResult["category"];
+  formatName: string;
+  prepMinutes: number;
+  presentMinutes: number;
+  role: string;
+  judgeRole: string;
+  situation: string;
+  ask: string;
+  pis: string[];
+  questionsAsked: { t: number; q: string }[];
+  rubric: { id: string; label: string; max: number; bands: [number, number, number, number] }[];
+  bandNames: string[];
+}
 
 export interface HistoryForPrompt {
   sessions: { date: string; drill: string; overall: number; fillersPerMin: number; pitchSpread?: number; tags: string[]; topFix?: string }[];
@@ -28,6 +44,7 @@ export interface AnalyzeContext {
   history?: HistoryForPrompt;
   previous?: { topFixTitle?: string; topFixSkillId?: string; fillersPerMin?: number; overall?: number };
   displayName?: string;
+  roleplay?: RoleplayForPrompt;
 }
 
 const scoreField = { type: Type.NUMBER, description: "1-10" } as const;
@@ -118,6 +135,26 @@ const RESPONSE_SCHEMA = {
     },
     nextFocusSkillId: { type: Type.STRING, description: "Skill id to train next. Must address a pattern, never an incident." },
     oneLiner: { type: Type.STRING, description: "≤ 14 words. Vero's verdict, direct and warm." },
+    rubric: {
+      type: Type.OBJECT,
+      description: "ONLY for role-play sessions: the judge's score sheet, one entry per rubric item id provided.",
+      required: ["items", "missed"],
+      properties: {
+        items: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            required: ["id", "points", "note"],
+            properties: {
+              id: { type: Type.STRING, description: "Rubric item id exactly as provided." },
+              points: { type: Type.INTEGER, description: "Points within the item's scale." },
+              note: { type: Type.STRING, description: "≤ 12 words of evidence for the score." },
+            },
+          },
+        },
+        missed: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Performance indicators that were never addressed, verbatim." },
+      },
+    },
   },
 };
 
@@ -144,6 +181,12 @@ const analysisSchema = z.object({
   moments: z.array(z.object({ t: z.number(), kind: z.enum(["good", "fix"]), note: z.string() })),
   nextFocusSkillId: z.string(),
   oneLiner: z.string(),
+  rubric: z
+    .object({
+      items: z.array(z.object({ id: z.string(), points: z.number(), note: z.string() })),
+      missed: z.array(z.string()),
+    })
+    .optional(),
 });
 
 function systemInstruction(): string {
@@ -165,6 +208,13 @@ Scoring: use the whole 1–10 range and be decisive.
 - engagement: facts only → ≤ 5; one hook, example or analogy → 6–7; hooks, questions, contrast and a landing → 8+.
 - structure: no point first → ≤ 5; framework followed → 7; signposted with a strong close → 8+.
 - Compare against the speaker's history averages when provided: if this clip is clearly better or worse than their average in a dimension, move that score by at least one point.
+
+Role-play sessions (DECA / FBLA), when a case and rubric are provided:
+- You are the judge. Score every rubric item within its scale, using the band definitions given. DECA bands: Exceeds Expectations = would rank in the top 10% of business personnel performing this indicator; Meets = acceptable and effective, 70–89th percentile, no further training needed; Below = limited effectiveness, 50–69th percentile; Little/No Value = 0–49th percentile. An indicator that was never mentioned or applied scores in the lowest band. For "Exemplary/Proficient/Developing/Novice" and FBLA sheets, use the same top-10% / competent / limited / absent logic.
+- A performance indicator counts as addressed only if the speaker defines or clearly applies it to THIS company's situation. Naming it without applying it is "Below". List every unaddressed indicator in rubric.missed, verbatim.
+- Weigh the judge questions: they were shown on screen at the listed times; judge the answers that follow them.
+- Roleplay observation tags (pi-missed, pi-shallow, no-greeting, no-recommendation, no-close, vague-plan, weak-qa, no-business-vocab, ran-short, ran-long, no-alternatives) exist for this purpose; use them, and pick the topFix from what cost the most rubric points.
+- Do not invent facts about the company beyond the case. Judge what was said.
 
 Output rules:
 - observations: 3–6 items, tags ONLY from the catalog provided, each with severity 1–3, incident true/false, and ≤ 12 words of evidence.
@@ -209,6 +259,17 @@ function userPrompt(ctx: AnalyzeContext): string {
     lines.push(`Use the history: name persistent ceilings, credit real improvement, and do not repeat a fix that has clearly been solved.`);
   } else if (ctx.previous?.topFixTitle) {
     lines.push(`Last session's top fix: "${ctx.previous.topFixTitle}" (${ctx.previous.topFixSkillId ?? "?"}). Last fillers/min: ${ctx.previous.fillersPerMin ?? "?"}. Last overall: ${ctx.previous.overall ?? "?"}.`);
+  }
+  const rp = ctx.roleplay;
+  if (rp) {
+    lines.push(`ROLE-PLAY: ${rp.org} ${rp.formatName} (${rp.prepMinutes} min prep, up to ${rp.presentMinutes} min with the judge).`);
+    lines.push(`Participant role: ${rp.role}. Judge role: ${rp.judgeRole}.`);
+    lines.push(`Situation: ${rp.situation}`);
+    lines.push(`The ask: ${rp.ask}`);
+    lines.push(`Performance indicators: ${rp.pis.map((p, i) => `${i + 1}) ${p}`).join(" ")}`);
+    lines.push(rp.questionsAsked.length ? `Judge questions shown on screen: ${rp.questionsAsked.map((q) => `[${Math.round(q.t)}s] ${q.q}`).join(" | ")}` : "No judge questions were shown.");
+    lines.push(`Rubric (score each id within its scale; band upper bounds listed low→high, named ${rp.bandNames.join(" / ")}): ${rp.rubric.map((r) => `${r.id}: "${r.label}" max ${r.max}, bands ${r.bands.join("/")}`).join("; ")}.`);
+    lines.push(`Return rubric.items with one entry per id above and rubric.missed with unaddressed indicators.`);
   }
   lines.push(`Observation tag catalog (tag: when to use): ${OBSERVATION_TAGS.map((t) => `${t.tag}: ${t.hint}`).join("; ")}.`);
   lines.push(`Skill ids you may reference: ${skillList}.`);
@@ -337,7 +398,24 @@ export async function analyzeMedia(bytes: Buffer | Uint8Array, mimeType: string,
   }
   const nextFocus = validSkill(parsed.nextFocusSkillId, topFix.skillId);
 
+  // Role-play rubric: attach labels and maxima from the spec, clamp points, total it.
+  let rubric: RubricResult | undefined;
+  if (ctx.roleplay && parsed.rubric) {
+    const byId = new Map(parsed.rubric.items.map((it) => [it.id, it]));
+    const items = ctx.roleplay.rubric.map((spec) => {
+      const got = byId.get(spec.id);
+      const points = Math.max(0, Math.min(spec.max, Math.round(got?.points ?? 0)));
+      return { id: spec.id, label: spec.label, points, max: spec.max, note: trimWords(got?.note ?? "", 14) };
+    });
+    const total = items.reduce((a, b) => a + b.points, 0);
+    const max = items.reduce((a, b) => a + b.max, 0);
+    const known = new Set(ctx.roleplay.pis.map((p) => p.toLowerCase()));
+    const missed = parsed.rubric.missed.filter((m) => known.has(m.toLowerCase()) || ctx.roleplay!.pis.some((p) => p.toLowerCase().includes(m.toLowerCase().slice(0, 30))));
+    rubric = { org: ctx.roleplay.org, category: ctx.roleplay.category, items, total, max, missed };
+  }
+
   return {
+    rubric,
     transcript: parsed.transcript.trim(),
     wordCount,
     wpm: Math.round(wordCount / minutes),

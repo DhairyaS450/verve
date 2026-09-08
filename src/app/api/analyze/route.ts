@@ -27,6 +27,23 @@ const bodySchema = z.object({
     displayName: z.string().optional(),
     audio: z.any().optional(),
     endedBy: z.enum(["timer", "user"]).optional(),
+    roleplay: z
+      .object({
+        org: z.enum(["DECA", "FBLA"]),
+        category: z.enum(["principles", "series", "team", "pfl", "fbla-individual", "fbla-team"]),
+        formatName: z.string().max(80),
+        prepMinutes: z.number(),
+        presentMinutes: z.number(),
+        role: z.string().max(400),
+        judgeRole: z.string().max(120),
+        situation: z.string().max(4000),
+        ask: z.string().max(600),
+        pis: z.array(z.string().max(300)).max(10),
+        questionsAsked: z.array(z.object({ t: z.number(), q: z.string().max(400) })).max(8),
+        rubric: z.array(z.object({ id: z.string(), label: z.string().max(200), max: z.number(), bands: z.tuple([z.number(), z.number(), z.number(), z.number()]) })).max(16),
+        bandNames: z.array(z.string()).max(4),
+      })
+      .optional(),
     history: z
       .object({
         sessions: z.array(

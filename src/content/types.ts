@@ -7,7 +7,8 @@ export type BranchId =
   | "presence"
   | "engagement"
   | "conversation"
-  | "stage";
+  | "stage"
+  | "roleplay";
 
 export interface Branch {
   id: BranchId;
@@ -44,7 +45,11 @@ export type MaterialKind =
   | "line"
   | "paragraph"
   | "story-prompt"
-  | "expert";
+  | "expert"
+  /** A DECA / FBLA case: situation, role, performance indicators, judge questions */
+  | "case"
+  /** Performance indicators only, as flashcards */
+  | "pis";
 
 export interface Material {
   kind: MaterialKind;

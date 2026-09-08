@@ -16,6 +16,7 @@ const GOALS: { id: Goal; label: string }[] = [
   { id: "story", label: "Tell better stories" },
   { id: "stage", label: "Speak on stage" },
   { id: "confidence", label: "Sound confident" },
+  { id: "roleplay", label: "Win DECA / FBLA role-plays" },
 ];
 
 export default function SettingsPage() {

@@ -12,7 +12,7 @@ import { fmt1, localDateStr } from "./format";
 const WINDOW = 6;
 const BLOCK = 3;
 const DECAY = 0.85;
-const DEFAULT_FOCUS: Record<string, string> = { stage: "pause", spot: "wheel-60", story: "story-formula", confidence: "volume" };
+const DEFAULT_FOCUS: Record<string, string> = { stage: "pause", spot: "wheel-60", story: "story-formula", confidence: "volume", roleplay: "rp-pis" };
 
 export function analyzedOnly(sessions: SessionDoc[]): SessionDoc[] {
   return sessions.filter((s) => s.status === "analyzed" && s.ai).sort((a, b) => b.createdAt - a.createdAt);
@@ -116,6 +116,7 @@ export function dimensionOfSkill(skillId: string): Dimension | "incident" {
   if (branch === "structure") return "structure";
   if (branch === "presence") return "presence";
   if (branch === "story" || branch === "engagement") return "engagement";
+  if (branch === "roleplay") return "structure";
   return "clarity";
 }
 

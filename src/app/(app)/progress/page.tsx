@@ -14,12 +14,13 @@ import { liveStreak, userLevel } from "@/lib/xp";
 import { VERO } from "@/content/vero";
 import { Vero } from "@/components/Vero";
 
-type MetricKey = "fillers" | "wpm" | "variety" | "overall";
+type MetricKey = "fillers" | "wpm" | "variety" | "overall" | "roleplay";
 const TABS: { key: MetricKey; label: string; unit?: string; band?: [number, number]; lower?: boolean; max?: number }[] = [
   { key: "fillers", label: "Fillers / min", band: [0, 2], lower: true },
   { key: "wpm", label: "Pace", unit: "wpm", band: [120, 160], max: 200 },
   { key: "variety", label: "Vocal variety", band: [7, 10], max: 10 },
   { key: "overall", label: "Overall", band: [7, 10], max: 10 },
+  { key: "roleplay", label: "Roleplay score", unit: "/100", band: [85, 100], max: 100 },
 ];
 
 export default function ProgressPage() {
@@ -45,15 +46,17 @@ export default function ProgressPage() {
   }, [profile]);
 
   const analyzed = useMemo(() => sessions.filter((s) => s.status === "analyzed" && s.ai).reverse(), [sessions]);
+  const hasRoleplay = useMemo(() => analyzed.some((s) => s.ai?.rubric), [analyzed]);
   const points = useMemo(
     () =>
-      analyzed.map((s) => ({
+      (tab === "roleplay" ? analyzed.filter((s) => s.ai?.rubric) : analyzed).map((s) => ({
         x: shortDate(s.date),
-        y: tab === "fillers" ? s.ai!.fillers.perMin : tab === "wpm" ? s.ai!.wpm : tab === "variety" ? s.ai!.scores.vocalVariety : s.ai!.scores.overall,
+        y: tab === "fillers" ? s.ai!.fillers.perMin : tab === "wpm" ? s.ai!.wpm : tab === "variety" ? s.ai!.scores.vocalVariety : tab === "roleplay" ? (s.ai!.rubric?.total ?? 0) : s.ai!.scores.overall,
       })),
     [analyzed, tab],
   );
   const t = TABS.find((x) => x.key === tab)!;
+  const visibleTabs = TABS.filter((x) => x.key !== "roleplay" || hasRoleplay);
   const first = analyzed[0]?.ai;
   const last = analyzed[analyzed.length - 1]?.ai;
 
@@ -73,7 +76,7 @@ export default function ProgressPage() {
       <section className="mt-12 md:grid md:grid-cols-[1fr_280px] md:gap-16">
         <div>
           <div className="flex gap-5 overflow-x-auto hairline-strong pt-3 [scrollbar-width:none]">
-            {TABS.map((x) => (
+            {visibleTabs.map((x) => (
               <button key={x.key} type="button" onClick={() => setTab(x.key)} aria-pressed={tab === x.key} className={clsx("label-ink min-h-[40px] whitespace-nowrap border-b-2 -mb-px", tab === x.key ? "border-ink" : "border-transparent text-ink-3")}>
                 {x.label}
               </button>
