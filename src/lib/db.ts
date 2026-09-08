@@ -180,7 +180,7 @@ export async function commitSessionResults(opts: {
   const analyzedSession: SessionDoc = { ...session, ai: analysis, status: "analyzed" };
   const history = [analyzedSession, ...sessions.filter((s) => s.id !== session.id)];
   const decision = decideFocus({ profile, sessions: history, skills: mergedSkills });
-  const focus = nextFocusBlock(profile.focus, decision, history);
+  const focus = nextFocusBlock(profile.focus, decision, history, analyzedSession);
 
   const profilePatch: Partial<UserProfile> = {
     xp: (profile.xp ?? 0) + xp,
@@ -199,7 +199,8 @@ export async function commitSessionResults(opts: {
     stripUndefined({ ai: analysis, status: "analyzed", xp, isNewDrill, coach: decision }),
     { merge: true },
   );
-  if (session.kind === "daily") {
+  const lastBlock = !session.blockCount || (session.blockIndex ?? 1) >= session.blockCount;
+  if (session.kind === "daily" && lastBlock) {
     batch.set(doc(db, `${userDocPath(profile.uid)}/plans/${session.date}`), { completed: true, sessionId: session.id }, { merge: true });
   }
   // Tomorrow's plan is rebuilt from the new focus.

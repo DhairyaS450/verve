@@ -140,13 +140,28 @@ export function patternCountForSkill(skillId: string, sessions: SessionDoc[], n 
   return { count, of: list.length };
 }
 
-export function decideFocus(opts: { profile: UserProfile; sessions: SessionDoc[]; skills: Record<string, SkillState> }): CoachDecision {
+export interface CoachInput {
+  profile: UserProfile;
+  sessions: SessionDoc[];
+  skills: Record<string, SkillState>;
+}
+
+/**
+ * Every defensible focus, best first: hold the current block, then recurring
+ * patterns, then weak dimensions, then Vero's call, then the goal default.
+ */
+export function rankFocusCandidates(opts: CoachInput): CoachDecision[] {
   const { profile, skills } = opts;
   const list = analyzedOnly(opts.sessions).slice(0, WINDOW);
   const goalDefault = profile.goal ? DEFAULT_FOCUS[profile.goal] : "wheel-60";
+  const out: CoachDecision[] = [];
+  const push = (c: CoachDecision) => {
+    if (!out.some((x) => x.skillId === c.skillId)) out.push(c);
+  };
 
   if (!list.length) {
-    return { skillId: unlocked(goalDefault, skills) ? goalDefault : "wheel-60", reason: "First session. I need a baseline, not a performance.", evidence: { kind: "goal" } };
+    push({ skillId: unlocked(goalDefault, skills) ? goalDefault : "wheel-60", reason: "First session. I need a baseline, not a performance.", evidence: { kind: "goal" } });
+    return out;
   }
 
   const dims = weightedDimensionAverages(list);
@@ -167,60 +182,86 @@ export function decideFocus(opts: { profile: UserProfile; sessions: SessionDoc[]
     if (!improved) {
       const day = block.sessions + 1;
       const label = dim === "incident" ? "" : `${DIMENSION_LABELS[dim]} still ${fmt1(dims[dim].avg)}.`;
-      return {
+      push({
         skillId: block.skillId,
         reason: `Day ${day} of ${BLOCK} on ${SKILL_MAP[block.skillId].name.toLowerCase()}. ${label}`.trim(),
         evidence: { kind: "keep", day, of: BLOCK, dimension: dim === "incident" ? undefined : dim, avg: dim === "incident" ? undefined : dims[dim].avg },
-      };
+      });
     }
   }
 
   const avoid = block?.skillId;
 
-  // ---- 2. Strongest recurring pattern (needs 2 sessions, or 1 strong one when history is thin).
+  // ---- 2. Recurring patterns (needs 2 sessions, or 1 strong one when history is thin).
   const minCount = n >= 3 ? 2 : 1;
   for (const p of patterns) {
     if (p.count < minCount) continue;
     if (p.skillId === avoid && block && block.sessions >= BLOCK) continue; // just finished a block on it; rotate
     const skillId = unlocked(p.skillId, skills) ? p.skillId : firstUnlocked(DIMENSION_SKILLS[p.dimension as Dimension] ?? [], skills, avoid);
     if (!skillId) continue;
-    return {
+    push({
       skillId,
       reason: n === 1 ? `${p.label} showed up in your baseline.` : `${p.label} in ${p.count} of your last ${n} sessions.`,
       evidence: { kind: "pattern", tag: p.tag, count: p.count, of: n, dimension: p.dimension === "incident" ? undefined : p.dimension },
-    };
+    });
   }
 
-  // ---- 3. Weakest dimension with enough samples.
+  // ---- 3. Weak dimensions with enough samples, weakest first.
   const ranked = DIMENSIONS.filter((d) => dims[d].n >= Math.min(3, n)).sort((a, b) => dims[a].avg - dims[b].avg);
-  const weakest = ranked[0];
-  if (weakest && dims[weakest].avg < 7.5) {
-    const skillId = firstUnlocked(DIMENSION_SKILLS[weakest], skills, avoid);
-    if (skillId) {
-      return {
-        skillId,
-        reason: `${DIMENSION_LABELS[weakest]} averaged ${fmt1(dims[weakest].avg)} over ${dims[weakest].n} sessions. Lowest of six.`,
-        evidence: { kind: "dimension", dimension: weakest, avg: dims[weakest].avg, of: dims[weakest].n },
-      };
-    }
+  for (const d of ranked) {
+    if (dims[d].avg >= 7.5) break;
+    const skillId = firstUnlocked(DIMENSION_SKILLS[d], skills, avoid);
+    if (!skillId) continue;
+    push({
+      skillId,
+      reason: `${DIMENSION_LABELS[d]} averaged ${fmt1(dims[d].avg)} over ${dims[d].n} sessions.${d === ranked[0] ? " Lowest of six." : ""}`,
+      evidence: { kind: "dimension", dimension: d, avg: dims[d].avg, of: dims[d].n },
+    });
   }
 
   // ---- 4. Vero's suggestion, then the goal default.
   const vero = list[0].ai?.nextFocusSkillId;
   if (vero && unlocked(vero, skills) && vero !== avoid) {
-    return { skillId: vero, reason: `Vero's call: ${SKILL_MAP[vero].name.toLowerCase()}.`, evidence: { kind: "vero" } };
+    push({ skillId: vero, reason: `Vero's call: ${SKILL_MAP[vero].name.toLowerCase()}.`, evidence: { kind: "vero" } });
   }
   const fallback = unlocked(goalDefault, skills) ? goalDefault : "wheel-60";
-  return { skillId: fallback, reason: `Building toward your goal: ${SKILL_MAP[fallback].name.toLowerCase()}.`, evidence: { kind: "goal" } };
+  push({ skillId: fallback, reason: `Building toward your goal: ${SKILL_MAP[fallback].name.toLowerCase()}.`, evidence: { kind: "goal" } });
+  return out;
+}
+
+export function decideFocus(opts: CoachInput): CoachDecision {
+  return rankFocusCandidates(opts)[0];
+}
+
+/**
+ * A second focus for longer sessions: the next candidate in a different dimension.
+ * Falls back to something new from a branch you haven't touched lately.
+ */
+export function decideSecondaryFocus(opts: CoachInput, primarySkillId: string, alsoExclude: string[] = []): CoachDecision {
+  const taken = [primarySkillId, ...alsoExclude];
+  const takenDims = new Set(taken.map(dimensionOfSkill));
+  const takenBranches = new Set(taken.map((id) => SKILL_MAP[id]?.branch));
+  const next = rankFocusCandidates(opts).find(
+    (c) => !taken.includes(c.skillId) && c.evidence.kind !== "keep" && c.evidence.kind !== "goal" && !takenDims.has(dimensionOfSkill(c.skillId)),
+  );
+  if (next) return next;
+  const { skills } = opts;
+  const candidates = Object.values(SKILL_MAP)
+    .filter((s) => !taken.includes(s.id) && !takenBranches.has(s.branch) && unlocked(s.id, skills) && (skills[s.id]?.level ?? 0) < 4)
+    .sort((a, b) => (skills[a.id]?.lastPracticedAt ?? 0) - (skills[b.id]?.lastPracticedAt ?? 0) || a.tier - b.tier);
+  const pick = candidates[0]?.id ?? "wheel-60";
+  return { skillId: pick, reason: `Something new: ${SKILL_MAP[pick].name.toLowerCase()}.`, evidence: { kind: "explore" } };
 }
 
 /** Advance the focus block after a session, given the decision for the next one. */
-export function nextFocusBlock(prev: FocusBlock | undefined, decision: CoachDecision, sessions: SessionDoc[]): FocusBlock {
+export function nextFocusBlock(prev: FocusBlock | undefined, decision: CoachDecision, sessions: SessionDoc[], justAnalyzed?: SessionDoc): FocusBlock {
   const list = analyzedOnly(sessions);
   const dim = dimensionOfSkill(decision.skillId);
   const dims = weightedDimensionAverages(list.slice(0, WINDOW));
   if (prev && prev.skillId === decision.skillId && decision.evidence.kind === "keep") {
-    return { ...prev, sessions: prev.sessions + 1, reason: decision.reason, evidence: decision.evidence };
+    // A second drill in the same session trains a different focus; it should not burn a day of this block.
+    const counts = !justAnalyzed?.focusSkillId || justAnalyzed.focusSkillId === prev.skillId;
+    return { ...prev, sessions: counts ? prev.sessions + 1 : prev.sessions, reason: decision.reason, evidence: decision.evidence };
   }
   return {
     skillId: decision.skillId,

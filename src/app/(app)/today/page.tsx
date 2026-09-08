@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { getPlan, getSkillStates, listSessions, savePlan } from "@/lib/db";
-import { buildPlan } from "@/lib/planner";
+import { buildPlan, planBlocks, planIsCurrent, planMinutes } from "@/lib/planner";
 import type { PlanDoc, SessionDoc, SkillState } from "@/lib/types";
 import { DRILL_MAP } from "@/content/drills";
 import { SKILL_MAP } from "@/content/skills";
@@ -29,8 +29,9 @@ export default function TodayPage() {
       const today = localDateStr();
       const [ss, sk, existing] = await Promise.all([listSessions(profile.uid, 40), getSkillStates(profile.uid), getPlan(profile.uid, today)]);
       if (!alive) return;
-      let p = existing;
-      if (!p || !DRILL_MAP[p.drillId]) {
+      let p: PlanDoc;
+      if (planIsCurrent(existing, profile)) p = existing;
+      else {
         p = buildPlan({ profile, skills: sk, sessions: ss, date: today });
         await savePlan(profile.uid, p);
       }
@@ -43,7 +44,7 @@ export default function TodayPage() {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.uid, profile?.totalSessions]);
+  }, [profile?.uid, profile?.totalSessions, profile?.sessionMinutes]);
 
   if (!profile || !ready || !plan) {
     return (
@@ -55,15 +56,23 @@ export default function TodayPage() {
   }
 
   const warmup = DRILL_MAP[plan.warmupId];
-  const drill = DRILL_MAP[plan.drillId];
+  const blocks = planBlocks(plan);
   const focus = SKILL_MAP[plan.focusSkillId];
   const analyzed = sessions.filter((s) => s.status === "analyzed" && s.ai);
   const last = analyzed[0];
   const prev = analyzed[1];
   const streak = liveStreak(profile.streak, localDateStr());
-  const total = (warmup?.minutes ?? 0) + (drill?.minutes ?? 0);
-  const todaySession = sessions.find((s) => s.date === localDateStr() && s.status === "analyzed" && s.kind === "daily");
+  const total = planMinutes(plan);
+  const todaySession = sessions.find((s) => s.date === localDateStr() && s.status === "analyzed" && s.kind === "daily" && (!s.blockCount || (s.blockIndex ?? 1) >= s.blockCount));
   const done = plan.completed || Boolean(todaySession);
+  const rows: { label: string; title: string; minutes: number; sub?: string }[] = [
+    ...(warmup && plan.drillId !== "m-baseline" ? [{ label: "Warmup", title: warmup.name, minutes: warmup.minutes }] : []),
+    ...blocks.map((b, i) => {
+      const d = DRILL_MAP[b.drillId];
+      const f = SKILL_MAP[b.focusSkillId];
+      return { label: blocks.length > 1 ? `Drill ${i + 1} · ${f?.name ?? ""}` : "Drill", title: d.name, minutes: d.minutes, sub: i === 0 ? d.intro : b.reason };
+    }),
+  ];
 
   return (
     <div className="pb-12 md:grid md:grid-cols-[1fr_300px] md:gap-16">
@@ -81,25 +90,17 @@ export default function TodayPage() {
             </VeroLine>
 
             <ol className="mt-10 border-t border-ink rise-2">
-              {warmup && drill.id !== "m-baseline" && (
-                <li className="grid grid-cols-[36px_1fr_auto] items-baseline gap-3 py-4 border-b border-line">
-                  <span className="num text-[12px] text-ink-3">01</span>
-                  <span>
-                    <span className="label block">Warmup</span>
-                    <span className="font-display text-[20px] md:text-[24px] leading-tight block mt-1">{warmup.name}</span>
+              {rows.map((r, i) => (
+                <li key={i} className="grid grid-cols-[36px_1fr_auto] items-baseline gap-3 py-4 border-b border-line">
+                  <span className="num text-[12px] text-ink-3">{String(i + 1).padStart(2, "0")}</span>
+                  <span className="min-w-0">
+                    <span className="label block">{r.label}</span>
+                    <span className="font-display text-[20px] md:text-[24px] leading-tight block mt-1">{r.title}</span>
+                    {r.sub && <span className="text-[13px] text-ink-2 block mt-1">{r.sub}</span>}
                   </span>
-                  <span className="num text-[13px] text-ink-2">{warmup.minutes} min</span>
+                  <span className="num text-[13px] text-ink-2">{r.minutes} min</span>
                 </li>
-              )}
-              <li className="grid grid-cols-[36px_1fr_auto] items-baseline gap-3 py-4 border-b border-line">
-                <span className="num text-[12px] text-ink-3">{warmup ? "02" : "01"}</span>
-                <span>
-                  <span className="label block">Drill</span>
-                  <span className="font-display text-[20px] md:text-[24px] leading-tight block mt-1">{drill.name}</span>
-                  <span className="text-[13px] text-ink-2 block mt-1">{drill.intro}</span>
-                </span>
-                <span className="num text-[13px] text-ink-2">{drill.minutes} min</span>
-              </li>
+              ))}
             </ol>
 
             <div className="mt-8 flex flex-col gap-3 md:flex-row md:items-center rise-3">

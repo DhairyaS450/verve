@@ -78,7 +78,7 @@ export interface Observation {
 }
 
 export interface CoachEvidence {
-  kind: "pattern" | "dimension" | "keep" | "vero" | "goal";
+  kind: "pattern" | "dimension" | "keep" | "vero" | "goal" | "explore";
   tag?: string;
   count?: number;
   of?: number;
@@ -137,6 +137,9 @@ export interface SessionDoc {
   date: string;
   kind: "daily" | "free" | "baseline";
   warmupId?: string;
+  /** 1-based position within a multi-drill session, and how many drills the session had */
+  blockIndex?: number;
+  blockCount?: number;
   drillId: string;
   drillName: string;
   skillIds: string[];
@@ -174,13 +177,26 @@ export interface SkillState {
   bestScore?: number;
 }
 
+export interface PlanBlock {
+  drillId: string;
+  focusSkillId: string;
+  /** ≤ 14 words. Why this block. */
+  reason: string;
+}
+
 export interface PlanDoc {
   date: string;
   warmupId: string;
+  /** First (or only) drill block */
   drillId: string;
   focusSkillId: string;
   /** ≤ 14 words. Why today looks like this. */
   reason: string;
+  /** Extra drill blocks for longer sessions, each with a different focus */
+  second?: PlanBlock;
+  third?: PlanBlock;
+  /** The session length this plan was built for; a change regenerates the plan */
+  minutes?: number;
   generatedAt: number;
   sessionId?: string;
   completed: boolean;

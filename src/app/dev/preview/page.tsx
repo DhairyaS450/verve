@@ -17,6 +17,9 @@ import { Vero } from "@/components/Vero";
 import { Flame } from "@/components/Flame";
 import { Confetti } from "@/components/Confetti";
 import { averageScores, decideFocus } from "@/lib/coach";
+import { buildPlan, planBlocks, planMinutes } from "@/lib/planner";
+import { DRILL_MAP } from "@/content/drills";
+import { SKILL_MAP } from "@/content/skills";
 import type { UserProfile } from "@/lib/types";
 
 const MOCK_AI: NonNullable<SessionDoc["ai"]> = {
@@ -102,7 +105,7 @@ export default function Preview() {
   if (process.env.NODE_ENV === "production") notFound();
   const [tab, setTab] = useState("vero");
   const [boom, setBoom] = useState(0);
-  const tabs = ["coach", "vero", "feedback", "record", "progress", "skills", "wheel"];
+  const tabs = ["plan", "coach", "vero", "feedback", "record", "progress", "skills", "wheel"];
   return (
     <div className="max-w-[720px] mx-auto px-5 py-8">
       <div className="flex gap-4 mb-8">
@@ -139,6 +142,28 @@ export default function Preview() {
           </button>
           <Confetti key={boom} fire={boom > 0} />
         </div>
+      )}
+      {tab === "plan" && (
+        <ol className="divide-y divide-line border-t border-line">
+          {([5, 10, 15] as const).map((m) => {
+            const sessions = mockHistory(5, { monotone: true });
+            const profile = { ...MOCK_PROFILE, sessionMinutes: m, focus: { skillId: "fillers", since: "2026-09-04", sessions: 1, startAvg: 6.5, startFillers: 2.5, reason: "Day 2 of 3 on filler control." } };
+            const p = buildPlan({ profile, skills: UNLOCKED_ALL, sessions, date: "2026-09-07" });
+            return (
+              <li key={m} className="py-4" data-minutes={m} data-total={planMinutes(p)} data-blocks={planBlocks(p).length}>
+                <p className="label">
+                  {m} min · plan is {planMinutes(p)} min · {planBlocks(p).length} drill{planBlocks(p).length > 1 ? "s" : ""}
+                </p>
+                <p className="text-[14px] mt-1">Warmup: {DRILL_MAP[p.warmupId]?.name} ({DRILL_MAP[p.warmupId]?.minutes} min)</p>
+                {planBlocks(p).map((b, i) => (
+                  <p key={b.drillId} className="text-[14px]">
+                    Drill {i + 1}: {DRILL_MAP[b.drillId]?.name} ({DRILL_MAP[b.drillId]?.minutes} min) · focus {SKILL_MAP[b.focusSkillId]?.name} · {b.reason}
+                  </p>
+                ))}
+              </li>
+            );
+          })}
+        </ol>
       )}
       {tab === "coach" && (
         <ol className="divide-y divide-line border-t border-line">

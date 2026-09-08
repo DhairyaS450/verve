@@ -64,6 +64,11 @@ export default function Onboarding() {
             </button>
           ))}
         </div>
+        <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-ink-3">
+          <span>Short warmup, one quick drill.</span>
+          <span>Warmup, one or two drills.</span>
+          <span>Warmup, three drills, three focuses.</span>
+        </div>
       </div>
 
       <div className="mt-10 space-y-4">

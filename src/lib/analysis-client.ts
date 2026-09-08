@@ -33,7 +33,7 @@ export async function analyzeSession(opts: {
   skills: Record<string, SkillState>;
   sessions: SessionDoc[];
   audio?: AudioMetrics;
-}): Promise<{ analysis: VeroAnalysis; xp: number; profile: UserProfile; coach: SessionDoc["coach"] }> {
+}): Promise<{ analysis: VeroAnalysis; xp: number; profile: UserProfile; coach: SessionDoc["coach"]; skillUpdates: Record<string, SkillState> }> {
   const { profile, session, skills, sessions, audio } = opts;
   if (!session.recording) throw new Error("no recording");
   const user = firebaseAuth().currentUser;
@@ -95,5 +95,5 @@ export async function analyzeSession(opts: {
     sessions: others,
     isNewDrill: isNewDrill(session.drillId, others),
   });
-  return { analysis, xp: committed.xp, profile: committed.profile, coach: committed.coach };
+  return { analysis, xp: committed.xp, profile: committed.profile, coach: committed.coach, skillUpdates: committed.skillUpdates };
 }

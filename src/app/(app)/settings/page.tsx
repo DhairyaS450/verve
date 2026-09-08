@@ -112,6 +112,11 @@ export default function SettingsPage() {
             </button>
           ))}
         </div>
+        <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-ink-3">
+          <span>Short warmup, one quick drill.</span>
+          <span>Warmup, one or two drills.</span>
+          <span>Warmup, three drills, three focuses.</span>
+        </div>
         <p className="label mt-8">Goal</p>
         <ol className="mt-2 border-t border-line">
           {GOALS.map((g) => (
