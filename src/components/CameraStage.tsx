@@ -19,6 +19,7 @@ export function CameraStage({
   total,
   countdown,
   grace = 0,
+  signal = "waiting",
   className,
 }: {
   stream: MediaStream | null;
@@ -30,6 +31,8 @@ export function CameraStage({
   countdown?: number | null;
   /** Seconds allowed past `total` to finish a sentence */
   grace?: number;
+  /** Live microphone state: is a voice actually coming through? */
+  signal?: "waiting" | "ok" | "none";
   className?: string;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -74,6 +77,14 @@ export function CameraStage({
       </div>
       {overtime && recording && (
         <div className="absolute top-12 left-3 label text-accent">Finish the sentence</div>
+      )}
+      {/* Mic signal: the thing that would have saved a silent 12-minute session */}
+      <div className="absolute top-3 right-3 flex items-center gap-1.5">
+        <span className={clsx("w-[7px] h-[7px] rounded-full", signal === "ok" ? "bg-good" : signal === "none" ? "bg-accent blink" : "bg-paper/40")} />
+        <span className={clsx("text-[9px] tracking-[0.12em] uppercase", signal === "none" ? "text-accent font-semibold" : "text-paper/60")}>{signal === "ok" ? "Mic" : signal === "none" ? "No signal" : "Mic"}</span>
+      </div>
+      {signal === "none" && recording && (
+        <div className="absolute inset-x-3 top-[64px] bg-accent text-accent-ink px-3 py-2 text-[13px] font-semibold">No voice detected. Check your microphone.</div>
       )}
       {countdown !== null && countdown !== undefined && countdown > 0 && (
         <div className="absolute inset-0 flex items-center justify-center bg-ink/60">

@@ -5,6 +5,8 @@ import { useState } from "react";
 import type { SessionDoc, SkillState } from "@/lib/types";
 import { FeedbackView } from "@/components/FeedbackView";
 import { CameraStage } from "@/components/CameraStage";
+import { MicCheck } from "@/components/MicCheck";
+import type { LiveAudioAnalyzer } from "@/lib/audio/analyzer";
 import { TrendChart } from "@/components/TrendChart";
 import { SkillTree } from "@/components/SkillTree";
 import { TopicWheel } from "@/components/TopicWheel";
@@ -104,11 +106,37 @@ const MOCK_SKILLS: Record<string, SkillState> = {
   breath: { id: "breath", xp: 950, level: 5, sessions: 12 },
 };
 
+/** Stand-in for the live analyzer: a fixed level and a fixed amount of "voice heard". */
+function fakeAnalyzer(speechSeconds: number, level: number): LiveAudioAnalyzer {
+  let phase = 0;
+  return {
+    level,
+    speechSeconds,
+    speechFrames: Math.round(speechSeconds * 20),
+    totalFrames: 200,
+    lastSpeechAt: null,
+    resetCounters() {},
+    silentFor: () => 0,
+    waveform(out: Float32Array<ArrayBuffer>) {
+      phase += 0.4;
+      for (let i = 0; i < out.length; i++) out[i] = level * Math.sin(i / 9 + phase) * (0.6 + 0.4 * Math.sin(i / 90));
+    },
+  } as unknown as LiveAudioAnalyzer;
+}
+
+const FAKE_DEVICES = {
+  audio: [
+    { deviceId: "hs", kind: "audioinput", label: "Headset Microphone (Bluetooth)", groupId: "a" },
+    { deviceId: "lap", kind: "audioinput", label: "Microphone Array (Realtek)", groupId: "b" },
+  ] as MediaDeviceInfo[],
+  video: [{ deviceId: "cam", kind: "videoinput", label: "Integrated Camera", groupId: "c" }] as MediaDeviceInfo[],
+};
+
 export default function Preview() {
   if (process.env.NODE_ENV === "production") notFound();
   const [tab, setTab] = useState("vero");
   const [boom, setBoom] = useState(0);
-  const tabs = ["roleplay", "plan", "coach", "vero", "feedback", "record", "progress", "skills", "wheel"];
+  const tabs = ["mic", "roleplay", "plan", "coach", "vero", "feedback", "record", "progress", "skills", "wheel"];
   const rpCase = CASES.find((c) => c.id === "deca-sem-26-districtevent1") ?? CASES[0];
   const mockRubric: RubricResult = {
     org: "DECA",
@@ -127,6 +155,28 @@ export default function Preview() {
           </button>
         ))}
       </div>
+      {tab === "mic" && (
+        <div className="space-y-14">
+          <div>
+            <p className="label text-ink-3 mb-3">state: silent (dead headset mic, 6 s of nothing)</p>
+            <MicCheck analyzer={fakeAnalyzer(0, 0)} devices={FAKE_DEVICES} prefs={{ audioId: "hs" }} hasVideo onDevice={() => {}} onContinue={() => {}} />
+          </div>
+          <div className="hairline-strong pt-8">
+            <p className="label text-ink-3 mb-3">state: ok (voice heard)</p>
+            <MicCheck analyzer={fakeAnalyzer(1.4, 0.45)} devices={FAKE_DEVICES} prefs={{ audioId: "lap" }} hasVideo onDevice={() => {}} onContinue={() => {}} />
+          </div>
+          <div className="hairline-strong pt-8 -mx-5">
+            <p className="label text-ink-3 mb-3 px-5">recording with no signal after 8 s</p>
+            <CameraStage stream={null} hasVideo={false} analyzer={fakeAnalyzer(0, 0)} recording elapsed={11} total={75} grace={5} signal="none" />
+            <div className="px-5 mt-3 flex items-center justify-between gap-3 border border-accent p-3">
+              <span className="text-[13px]">Nothing is coming through the mic. Stop now, fix it, redo this drill.</span>
+              <button type="button" className="btn btn-sm shrink-0">Stop and fix mic</button>
+            </div>
+            <p className="label text-ink-3 mt-8 mb-3 px-5">recording, mic ok</p>
+            <CameraStage stream={null} hasVideo={false} analyzer={fakeAnalyzer(3, 0.4)} recording elapsed={23} total={75} grace={5} signal="ok" />
+          </div>
+        </div>
+      )}
       {tab === "vero" && (
         <div className="space-y-10">
           <div className="flex items-center justify-between h-[60px] border-b border-line">

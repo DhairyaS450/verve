@@ -6,13 +6,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import clsx from "clsx";
 import { X } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { getPlan, getSkillStates, listSessions, newSessionId, patchSession, savePlan, saveSession } from "@/lib/db";
+import { deleteSession, getPlan, getSkillStates, listSessions, newSessionId, patchSession, savePlan, saveSession } from "@/lib/db";
 import { buildPlan, planBlocks, planIsCurrent } from "@/lib/planner";
 import { buildMaterial, type SessionMaterial } from "@/lib/material";
 import { LiveAudioAnalyzer } from "@/lib/audio/analyzer";
-import { Recorder, getSessionStream, stopStream } from "@/lib/recorder";
+import { Recorder, activeDeviceIds, getSessionStream, listDevices, loadDevicePrefs, saveDevicePrefs, stopStream, type DeviceLists, type DevicePrefs } from "@/lib/recorder";
 import { DriveNotConnected, ensureFolder, getAccessToken } from "@/lib/drive";
-import { analyzeSession, uploadRecording } from "@/lib/analysis-client";
+import { AnalysisError, analyzeSession, uploadRecording } from "@/lib/analysis-client";
 import type { AudioMetrics, PlanDoc, SessionDoc, SessionRoleplay, SkillState, UserProfile } from "@/lib/types";
 import { DRILL_MAP } from "@/content/drills";
 import { SKILL_MAP } from "@/content/skills";
@@ -29,6 +29,7 @@ import { averageScores } from "@/lib/coach";
 import { Timer } from "@/components/Timer";
 import { Waveform } from "@/components/Waveform";
 import { CameraStage } from "@/components/CameraStage";
+import { MicCheck } from "@/components/MicCheck";
 import { TopicWheel } from "@/components/TopicWheel";
 import { FrameworkStrip } from "@/components/FrameworkStrip";
 import { BigLine, PassageBlock, Ticker, TwisterList } from "@/components/WarmupMaterial";
@@ -38,8 +39,9 @@ import { CaseBrief, JudgeQuestion, PiChecklist, PrepPad } from "@/components/Rol
 import { localDateStr, mmss } from "@/lib/format";
 import { liveStreak } from "@/lib/xp";
 
-type Phase = "loading" | "setup" | "warmup" | "brief" | "prep" | "record" | "review" | "feedback" | "error";
+type Phase = "loading" | "setup" | "miccheck" | "warmup" | "brief" | "prep" | "record" | "nospeech" | "review" | "feedback" | "error";
 type Kind = "daily" | "free" | "baseline";
+type Signal = "waiting" | "ok" | "none";
 
 interface Block {
   drill: Drill;
@@ -53,6 +55,7 @@ interface Run {
   stage: "uploading" | "analyzing" | "done" | "failed";
   uploadPct: number;
   error?: string;
+  errorCode?: string;
   xp?: number;
   blob: Blob;
   mimeType: string;
@@ -67,7 +70,10 @@ const RESPINS = 2;
 const RESPIN_KINDS = new Set(["topic", "object", "question", "story-prompt", "expert", "statements", "case"]);
 /** Drills that are judged on the official rubric. */
 const SIM_DRILLS = new Set(["m-rp-deca", "m-rp-quick", "m-rp-fbla", "m-rp-fbla-quick", "m-rp-deca-team"]);
-const EMPTY_AUDIO: AudioMetrics = { durationSec: 0, speakingRatio: 0, pauseCount: 0, longestPauseSec: 0, meanPauseSec: 0, pitchMedianHz: 0, pitchSpreadSemitones: 0, varietyScore: 0, volumeMeanDb: 0, volumeRangeDb: 0, monotone: false, envelope: [] };
+const EMPTY_AUDIO: AudioMetrics = { durationSec: 0, speechSeconds: 0, speakingRatio: 0, pauseCount: 0, longestPauseSec: 0, meanPauseSec: 0, pitchMedianHz: 0, pitchSpreadSemitones: 0, varietyScore: 0, volumeMeanDb: 0, volumeRangeDb: 0, monotone: false, envelope: [] };
+/** A take shorter than this is judged on Vero's ear alone; longer silent takes are refused locally. */
+const SILENT_MIN_DURATION = 8;
+const SILENT_MAX_SPEECH = 1.5;
 
 /** Which official format governs a role-play drill for this case. Quick drills keep the case's rubric. */
 function formatFor(drill: Drill, c: RoleplayCase): RoleplayFormat {
@@ -116,18 +122,25 @@ function PracticeFlow() {
   const profileRef = useRef<UserProfile | null>(null);
   const [latestProfile, setLatestProfile] = useState<UserProfile | null>(null);
 
-  const [runs, setRuns] = useState<Run[]>([]);
-  const runsRef = useRef<Run[]>([]);
+  const [runs, setRuns] = useState<(Run | undefined)[]>([]);
+  const runsRef = useRef<(Run | undefined)[]>([]);
   const pipelines = useRef<Promise<void>[]>([]);
 
   const streamRef = useRef<MediaStream | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [hasVideo, setHasVideo] = useState(true);
   const [displayAnalyzer, setDisplayAnalyzer] = useState<LiveAudioAnalyzer | null>(null);
+  const displayAnalyzerRef = useRef<LiveAudioAnalyzer | null>(null);
   const recAnalyzerRef = useRef<LiveAudioAnalyzer | null>(null);
   const [recAnalyzer, setRecAnalyzer] = useState<LiveAudioAnalyzer | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const [devices, setDevices] = useState<DeviceLists>({ audio: [], video: [] });
+  const [prefs, setPrefs] = useState<DevicePrefs>({});
+  const [micReturn, setMicReturn] = useState<"warmup" | "brief">("brief");
+  const [signal, setSignal] = useState<Signal>("waiting");
+  const [warmupSilent, setWarmupSilent] = useState(false);
+  const [silentTake, setSilentTake] = useState<{ durationSec: number; speechSeconds: number } | null>(null);
 
   const [drive, setDrive] = useState<"checking" | "ready" | "missing" | "error">("checking");
   const [gemini, setGemini] = useState<"checking" | "ready" | "missing">("checking");
@@ -164,6 +177,7 @@ function PracticeFlow() {
   const judgeQs = drill && rpCase && rpFormat ? judgeQuestionsFor(rpCase, drill, rpFormat) : null;
   const previous = useMemo(() => sessions.find((s) => s.status === "analyzed" && s.ai) ?? null, [sessions]);
   const multi = blocks.length > 1;
+  const presentRuns = runs.filter((r): r is Run => Boolean(r));
 
   useEffect(() => {
     if (profile && !profileRef.current) profileRef.current = profile;
@@ -216,6 +230,7 @@ function PracticeFlow() {
         setMaterials(mats);
         const w = kind === "daily" ? DRILL_MAP[p.warmupId] : undefined;
         setWarmupMaterial(w ? buildMaterial(w) : null);
+        setPrefs(loadDevicePrefs());
         go("setup");
       } catch (e) {
         console.error(e);
@@ -265,11 +280,10 @@ function PracticeFlow() {
     return () => {
       stopStream(streamRef.current);
       try {
-        displayAnalyzer?.stop();
+        displayAnalyzerRef.current?.stop();
       } catch {}
       wakeLockRef.current?.release().catch(() => {});
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Rotating Vero lines while analyzing
@@ -280,20 +294,37 @@ function PracticeFlow() {
   }, [phase]);
 
   // ---------------------------------------------------------------- media
+  /** (Re)open camera and mic with the chosen devices and start a fresh live analyzer. */
+  const acquire = useCallback(async (p: DevicePrefs) => {
+    try {
+      displayAnalyzerRef.current?.stop();
+    } catch {}
+    stopStream(streamRef.current);
+    const { stream: s, hasVideo: hv } = await getSessionStream(p);
+    streamRef.current = s;
+    setStream(s);
+    setHasVideo(hv);
+    const a = new LiveAudioAnalyzer(s);
+    a.start();
+    displayAnalyzerRef.current = a;
+    setDisplayAnalyzer(a);
+    const list = await listDevices();
+    setDevices(list);
+    const active = activeDeviceIds(s);
+    const merged = { audioId: p.audioId ?? active.audioId, videoId: p.videoId ?? active.videoId };
+    setPrefs(merged);
+    return s;
+  }, []);
+
   const begin = async () => {
     try {
-      const { stream: s, hasVideo: hv } = await getSessionStream();
-      streamRef.current = s;
-      setStream(s);
-      setHasVideo(hv);
-      const a = new LiveAudioAnalyzer(s);
-      a.start();
-      setDisplayAnalyzer(a);
+      await acquire(loadDevicePrefs());
       try {
         wakeLockRef.current = await navigator.wakeLock?.request("screen");
       } catch {}
       setElapsed(0);
-      go(warmup ? "warmup" : "brief");
+      setMicReturn(warmup ? "warmup" : "brief");
+      go("miccheck");
     } catch (e) {
       console.error(e);
       setError("Camera or microphone was blocked. Allow access and try again.");
@@ -301,14 +332,37 @@ function PracticeFlow() {
     }
   };
 
+  const onDevice = async (p: DevicePrefs) => {
+    saveDevicePrefs(p);
+    setPrefs(p);
+    try {
+      await acquire(p);
+    } catch (e) {
+      console.error(e);
+      setError("That device could not be opened. Pick another one.");
+      go("error");
+    }
+  };
+
+  const micOk = () => {
+    saveDevicePrefs(prefs);
+    setWarmupSilent(false);
+    setSignal("waiting");
+    setElapsed(0);
+    go(micReturn);
+  };
+
   // ---------------------------------------------------------------- pipeline (per block)
   const updateRun = useCallback(
     (i: number, patch: Partial<Run>) => {
       const next = [...runsRef.current];
-      next[i] = { ...next[i], ...patch };
+      const cur = next[i];
+      if (!cur) return;
+      next[i] = { ...cur, ...patch };
       runsRef.current = next;
       setRuns(next);
-      if (phaseRef.current === "review" && next.length > 0 && next.every((r) => r.stage === "done")) go("feedback");
+      const present = next.filter((r): r is Run => Boolean(r));
+      if (phaseRef.current === "review" && present.length > 0 && present.every((r) => r.stage === "done")) go("feedback");
     },
     [go],
   );
@@ -321,7 +375,7 @@ function PracticeFlow() {
         try {
           let withRec: SessionDoc = run.session;
           if (!skipUpload || !run.session.recording) {
-            updateRun(i, { stage: "uploading", uploadPct: 0, error: undefined });
+            updateRun(i, { stage: "uploading", uploadPct: 0, error: undefined, errorCode: undefined });
             await patchSession(prof.uid, run.session.id, { audio: run.audio, endedBy: run.session.endedBy, roleplay: run.session.roleplay, status: "uploading" });
             const recording = await uploadRecording({
               profile: prof,
@@ -333,11 +387,11 @@ function PracticeFlow() {
             });
             withRec = { ...run.session, audio: run.audio, recording };
           }
-          updateRun(i, { session: withRec, stage: "analyzing", error: undefined });
+          updateRun(i, { session: withRec, stage: "analyzing", error: undefined, errorCode: undefined });
           if (i > 0) await pipelines.current[i - 1]?.catch(() => {});
           const earlier = runsRef.current
             .slice(0, i)
-            .filter((r) => r.stage === "done")
+            .filter((r): r is Run => Boolean(r) && r!.stage === "done")
             .map((r) => r.session);
           const history = [...earlier, ...sessionsRef.current];
           const { analysis, xp, profile: updated, coach, skillUpdates } = await analyzeSession({
@@ -354,7 +408,8 @@ function PracticeFlow() {
         } catch (e) {
           console.error(e);
           const msg = e instanceof DriveNotConnected ? "Google Drive is not connected." : (e as Error).message;
-          updateRun(i, { stage: "failed", error: msg });
+          const code = e instanceof AnalysisError ? e.code : e instanceof DriveNotConnected ? "drive" : "failed";
+          updateRun(i, { stage: "failed", error: msg, errorCode: code });
           throw e;
         }
       })();
@@ -369,6 +424,7 @@ function PracticeFlow() {
     go("record");
     setElapsed(0);
     setRecording(false);
+    setSignal("waiting");
     askedRef.current = [];
     setAskedCount(0);
     setJudgeQ(null);
@@ -441,6 +497,41 @@ function PracticeFlow() {
     }, 1000);
   }, [drill, profile, plan, block, kind, warmup, material, bi, blocks.length, go, prepNotes]);
 
+  /** Where to go after a take: the next block without a run, else review. */
+  const afterTake = useCallback(
+    (i: number) => {
+      const nextIdx = blocks.findIndex((_, j) => j > i && !runsRef.current[j]);
+      if (nextIdx >= 0) {
+        setBi(nextIdx);
+        setElapsed(0);
+        setWheelDone(false);
+        setTickerDone(false);
+        setRespins(0);
+        setPrepNotes("");
+        setPiChecked([]);
+        setWheelKey((k) => k + 1);
+        go("brief");
+        return;
+      }
+      stopStream(streamRef.current);
+      streamRef.current = null;
+      setStream(null);
+      try {
+        displayAnalyzerRef.current?.stop();
+      } catch {}
+      displayAnalyzerRef.current = null;
+      setDisplayAnalyzer(null);
+      const present = runsRef.current.filter((r): r is Run => Boolean(r));
+      if (!present.length) {
+        router.replace(kind === "baseline" ? "/onboarding" : "/today");
+        return;
+      }
+      go("review");
+      if (present.every((r) => r.stage === "done")) go("feedback");
+    },
+    [blocks, go, kind, router],
+  );
+
   const stopRecording = useCallback(async () => {
     const rec = recorderRef.current;
     const an = recAnalyzerRef.current;
@@ -455,6 +546,17 @@ function PracticeFlow() {
       const i = bi;
       const existing = runsRef.current[i];
       if (!existing) return;
+      // Silent take: nothing to upload, nothing to score. Offer a re-record instead.
+      if (durationSec >= SILENT_MIN_DURATION && (audio.speechSeconds ?? 0) < SILENT_MAX_SPEECH) {
+        const next = [...runsRef.current];
+        next[i] = undefined;
+        runsRef.current = next;
+        setRuns(next);
+        deleteSession(profile.uid, existing.session.id).catch(() => {});
+        setSilentTake({ durationSec, speechSeconds: audio.speechSeconds ?? 0 });
+        go("nospeech");
+        return;
+      }
       const roleplay = existing.session.roleplay ? { ...existing.session.roleplay, questionsAsked: askedRef.current, piChecked: piChecked.length ? piChecked : undefined } : undefined;
       const run: Run = { ...existing, blob, mimeType, durationSec, audio, session: { ...existing.session, endedBy: endedByRef.current, roleplay } };
       const next = [...runsRef.current];
@@ -462,35 +564,67 @@ function PracticeFlow() {
       runsRef.current = next;
       setRuns(next);
       startPipeline(i, run);
-      if (i + 1 < blocks.length) {
-        setBi(i + 1);
-        setElapsed(0);
-        setWheelDone(false);
-        setTickerDone(false);
-        setRespins(0);
-        setPrepNotes("");
-        setPiChecked([]);
-        setWheelKey((k) => k + 1);
-        go("brief");
-      } else {
-        stopStream(streamRef.current);
-        streamRef.current = null;
-        setStream(null);
-        try {
-          displayAnalyzer?.stop();
-        } catch {}
-        setDisplayAnalyzer(null);
-        go("review");
-        if (runsRef.current.length > 0 && runsRef.current.every((r) => r.stage === "done")) go("feedback");
-      }
+      afterTake(i);
     } catch (e) {
       console.error(e);
       setError("Recording failed. Try again.");
       go("error");
     }
-  }, [profile, displayAnalyzer, bi, blocks.length, startPipeline, go, piChecked]);
+  }, [profile, bi, startPipeline, go, piChecked, afterTake]);
 
-  // Elapsed ticker for warmup and prep; prep auto-advances into recording.
+  /** Bail out of a take whose microphone is dead. Nothing is kept. */
+  const abortRecording = useCallback(() => {
+    const rec = recorderRef.current;
+    const an = recAnalyzerRef.current;
+    recorderRef.current = null;
+    recAnalyzerRef.current = null;
+    rec?.discard();
+    try {
+      an?.stop();
+    } catch {}
+    setRecAnalyzer(null);
+    setRecording(false);
+    const existing = runsRef.current[bi];
+    if (existing && profile) deleteSession(profile.uid, existing.session.id).catch(() => {});
+    const next = [...runsRef.current];
+    next[bi] = undefined;
+    runsRef.current = next;
+    setRuns(next);
+    setSignal("waiting");
+    setMicReturn("brief");
+    go("miccheck");
+  }, [bi, profile, go]);
+
+  /** Re-open the mic and redo a block whose tape came back silent. */
+  const rerecordBlock = useCallback(
+    async (i: number) => {
+      const existing = runsRef.current[i];
+      if (existing && profile) deleteSession(profile.uid, existing.session.id).catch(() => {});
+      const next = [...runsRef.current];
+      next[i] = undefined;
+      runsRef.current = next;
+      setRuns(next);
+      setBi(i);
+      setElapsed(0);
+      setRespins(0);
+      setPiChecked([]);
+      setWheelDone(false);
+      setWheelKey((k) => k + 1);
+      try {
+        if (!streamRef.current) await acquire(prefs);
+      } catch (e) {
+        console.error(e);
+        setError("Camera or microphone was blocked. Allow access and try again.");
+        go("error");
+        return;
+      }
+      setMicReturn("brief");
+      go("miccheck");
+    },
+    [profile, prefs, acquire, go],
+  );
+
+  // Elapsed ticker for warmup and prep; prep auto-advances into recording; warmup watches the mic.
   useEffect(() => {
     if (phase !== "warmup" && phase !== "prep") return;
     const start = performance.now();
@@ -498,17 +632,27 @@ function PracticeFlow() {
       const e = (performance.now() - start) / 1000;
       setElapsed(e);
       if (phase === "prep" && drill && e >= (drill.prepSeconds ?? 0)) startRecording();
+      if (phase === "warmup") {
+        const a = displayAnalyzerRef.current;
+        setWarmupSilent(Boolean(a) && e >= 15 && (a?.speechSeconds ?? 0) < 0.3);
+      }
     }, 200);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // Recording clock + hard stop after the grace period; FBLA-style judge interruptions.
+  // Recording clock + hard stop after the grace period; live mic signal; FBLA-style judge interruptions.
   useEffect(() => {
     if (phase !== "record" || !recording || !drill) return;
     const t = setInterval(() => {
       const e = recorderRef.current?.elapsed ?? 0;
       setElapsed(e);
+      const an = recAnalyzerRef.current;
+      if (an) {
+        // Never heard a voice: red after 8 s. Heard one, then dead for 20 s: also red (unplugged mid-take).
+        if (an.speechSeconds < 0.3) setSignal(e >= 8 ? "none" : "waiting");
+        else setSignal(an.silentFor() < 4 ? "ok" : an.silentFor() > 20 ? "none" : "waiting");
+      }
       if (isSim && rpFormat?.questions === "during" && judgeQs) {
         const at = rpFormat.questionAt ?? [];
         const k = askedRef.current.length;
@@ -545,7 +689,7 @@ function PracticeFlow() {
 
   const saveNotes = async () => {
     if (!profile || !notes.trim()) return;
-    await Promise.all(runsRef.current.map((r) => patchSession(profile.uid, r.session.id, { notes: notes.trim() }).catch(() => {})));
+    await Promise.all(runsRef.current.filter((r): r is Run => Boolean(r)).map((r) => patchSession(profile.uid, r.session.id, { notes: notes.trim() }).catch(() => {})));
   };
 
   const finish = async () => {
@@ -590,8 +734,8 @@ function PracticeFlow() {
   const stepNames = [...(warmup ? ["Warmup"] : []), ...blocks.map((_, i) => (multi ? `Drill ${i + 1}` : "Drill")), "Review"];
   const stepIndex = () => {
     const base = warmup ? 1 : 0;
-    if (phase === "warmup") return 0;
-    if (phase === "brief" || phase === "prep" || phase === "record") return base + bi;
+    if (phase === "warmup" || phase === "miccheck") return 0;
+    if (phase === "brief" || phase === "prep" || phase === "record" || phase === "nospeech") return base + bi;
     return base + blocks.length;
   };
   const stepBar = () => {
@@ -610,14 +754,14 @@ function PracticeFlow() {
     const earlier = runs
       .slice(0, bi)
       .map((r, i) => ({ r, i }))
-      .filter((x) => x.r && x.r.durationSec > 0);
+      .filter((x): x is { r: Run; i: number } => Boolean(x.r) && x.r!.durationSec > 0);
     if (!earlier.length || phase === "review" || phase === "feedback") return null;
     return (
       <ul className="mt-3 space-y-1">
         {earlier.map(({ r, i }) => (
           <li key={i} className="flex items-center gap-2 text-[12px] text-ink-2">
             <VeroMark size={14} className={clsx(r.stage === "done" ? "text-good" : r.stage === "failed" ? "text-accent" : "text-ink-3 blink")} />
-            Drill {i + 1} · {r.stage === "uploading" ? `saving ${Math.round(r.uploadPct * 100)}%` : r.stage === "analyzing" ? "Vero is watching" : r.stage === "done" ? "reviewed" : "needs a retry"}
+            Drill {i + 1} · {r.stage === "uploading" ? `saving ${Math.round(r.uploadPct * 100)}%` : r.stage === "analyzing" ? "Vero is watching" : r.stage === "done" ? "reviewed" : r.errorCode === "no_speech" ? "silent tape" : "needs a retry"}
           </li>
         ))}
       </ul>
@@ -654,6 +798,7 @@ function PracticeFlow() {
   if (phase === "setup") {
     const total = (warmup?.minutes ?? 0) + blocks.reduce((a, b) => a + b.drill.minutes, 0);
     const rows: { label: string; title: string; minutes: string; sub?: string }[] = [
+      { label: "First", title: "Mic check", minutes: "10 sec", sub: "Say one sentence. A dead mic ends here, not after twelve minutes." },
       ...(warmup ? [{ label: "Warmup", title: warmup.name, minutes: `${warmup.minutes} min` }] : []),
       ...blocks.map((b, i) => ({
         label: multi ? `Drill ${i + 1} · ${SKILL_MAP[b.focusSkillId]?.name ?? ""}` : "Drill",
@@ -709,6 +854,17 @@ function PracticeFlow() {
     );
   }
 
+  // ---------------------------------------------------------------- MIC CHECK
+  if (phase === "miccheck") {
+    return (
+      <div className="max-w-[640px] pb-12">
+        {header("Before we start")}
+        {stepBar()}
+        <MicCheck analyzer={displayAnalyzer} devices={devices} prefs={prefs} hasVideo={hasVideo} onDevice={onDevice} onContinue={micOk} className="mt-6" />
+      </div>
+    );
+  }
+
   // ---------------------------------------------------------------- WARMUP
   if (phase === "warmup" && warmup && warmupMaterial) {
     const total = warmup.minutes * 60;
@@ -742,6 +898,21 @@ function PracticeFlow() {
         </div>
         <div className="mt-8">
           <Waveform analyzer={displayAnalyzer} height={40} />
+          {warmupSilent && (
+            <div className="mt-3 border border-accent p-3 flex items-center justify-between gap-3">
+              <span className="text-[13px] text-accent font-semibold">No voice detected in 15 seconds.</span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  setMicReturn("warmup");
+                  go("miccheck");
+                }}
+              >
+                Fix mic
+              </button>
+            </div>
+          )}
           {!ticker && <Timer seconds={elapsed} total={total} className="mt-4" countUp />}
         </div>
         <div className="mt-8 flex gap-3">
@@ -906,7 +1077,15 @@ function PracticeFlow() {
           )}
           {framework && <FrameworkStrip framework={framework} compact className="mt-3" />}
         </div>
-        <CameraStage stream={stream} hasVideo={hasVideo} analyzer={recAnalyzer ?? displayAnalyzer} recording={recording} elapsed={elapsed} total={speak} grace={GRACE} countdown={countdown} className="mt-4" />
+        <CameraStage stream={stream} hasVideo={hasVideo} analyzer={recAnalyzer ?? displayAnalyzer} recording={recording} elapsed={elapsed} total={speak} grace={GRACE} countdown={countdown} signal={signal} className="mt-4" />
+        {signal === "none" && recording && (
+          <div className="px-5 md:px-0 mt-3 flex items-center justify-between gap-3 border border-accent p-3">
+            <span className="text-[13px]">Nothing is coming through the mic. Stop now, fix it, redo this drill.</span>
+            <button type="button" className="btn btn-sm shrink-0" onClick={abortRecording}>
+              Stop and fix mic
+            </button>
+          </div>
+        )}
         <div className="px-5 md:px-0 mt-4 flex items-center gap-4">
           <button
             type="button"
@@ -929,9 +1108,54 @@ function PracticeFlow() {
     );
   }
 
+  // ---------------------------------------------------------------- NO SPEECH (silent take refused)
+  if (phase === "nospeech") {
+    const remaining = blocks.some((_, j) => j > bi && !runs[j]);
+    return (
+      <div className="max-w-[640px] pb-12">
+        {header("Silent take")}
+        {stepBar()}
+        <div className="mt-8 flex items-end gap-5">
+          <Vero pose="perched" size={120} className="shrink-0 -ml-2" />
+          <div>
+            <p className="label text-accent">Not saved</p>
+            <h1 className="font-display font-medium text-[32px] md:text-[44px] leading-[1] tracking-[-0.03em] mt-1">No speech on that take.</h1>
+          </div>
+        </div>
+        <p className="mt-5 text-[15px] text-ink-2">
+          {silentTake ? `${Math.round(silentTake.durationSec)} seconds recorded, ${silentTake.speechSeconds.toFixed(1)} seconds of voice heard. ` : ""}
+          Nothing was uploaded and nothing was scored. Usually a headset mic that isn&apos;t plugged in, or a muted input.
+        </p>
+        <div className="mt-8 flex flex-col gap-3">
+          <button
+            type="button"
+            className="btn-accent btn-block min-h-[60px]"
+            onClick={() => {
+              setMicReturn("brief");
+              setSilentTake(null);
+              go("miccheck");
+            }}
+          >
+            Fix mic and redo this drill
+          </button>
+          <button
+            type="button"
+            className="btn-ghost btn-block"
+            onClick={() => {
+              setSilentTake(null);
+              afterTake(bi);
+            }}
+          >
+            {remaining ? "Skip this drill" : presentRuns.length ? "Skip to review" : "Leave for now"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // ---------------------------------------------------------------- REVIEW (upload + reflect + analysis)
   if (phase === "review") {
-    const failed = runs.filter((r) => r.stage === "failed");
+    const failed = presentRuns.filter((r) => r.stage === "failed");
     return (
       <div className="max-w-[640px] pb-12">
         {header("Review")}
@@ -939,43 +1163,49 @@ function PracticeFlow() {
         <div className="mt-8">
           <div className="flex items-center gap-5">
             <Vero pose="notes" size={112} className="shrink-0 -ml-2" />
-            <p className="font-display text-[22px] md:text-[26px] leading-tight">{runs.some((r) => r.stage === "uploading") ? pick(VERO.uploading) : isSim ? "Scoring every indicator." : veroLine}</p>
+            <p className="font-display text-[22px] md:text-[26px] leading-tight">{presentRuns.some((r) => r.stage === "uploading") ? pick(VERO.uploading) : isSim ? "Scoring every indicator." : veroLine}</p>
           </div>
           <ul className="mt-5 space-y-3">
-            {runs.map((r, i) => (
-              <li key={i}>
-                <div className="flex items-baseline justify-between text-[12px]">
-                  <span className="label">
-                    {multi ? `Drill ${i + 1} · ` : ""}
-                    {r.session.drillName}
-                  </span>
-                  <span className={clsx("num", r.stage === "failed" ? "text-accent" : "text-ink-3")}>
-                    {r.stage === "uploading" ? `Saving to Drive · ${Math.round(r.uploadPct * 100)}%` : r.stage === "analyzing" ? "Vero is reviewing" : r.stage === "done" ? "Reviewed" : "Stopped"}
-                  </span>
-                </div>
-                <div className="mt-2 h-[2px] bg-paper-3">
-                  <div className={clsx("h-full transition-[width] duration-300", r.stage === "uploading" ? "bg-ink" : "bg-accent")} style={{ width: r.stage === "uploading" ? `${Math.round(r.uploadPct * 100)}%` : "100%" }} />
-                </div>
-                {r.stage === "failed" && (
-                  <div className="mt-3 flex flex-col gap-2">
-                    <p className="text-[14px]">{r.error}</p>
-                    {r.error?.includes("Drive") ? (
-                      <a href={`/api/auth/google?next=${encodeURIComponent("/today")}`} className="btn btn-sm self-start">
-                        Reconnect Google Drive
-                      </a>
-                    ) : r.error?.includes("Gemini") ? (
-                      <Link href="/settings#gemini" className="btn btn-sm self-start">
-                        Open Settings
-                      </Link>
-                    ) : (
-                      <button type="button" className="btn btn-sm self-start" onClick={() => retry(i)}>
-                        Retry
-                      </button>
-                    )}
+            {runs.map((r, i) =>
+              r ? (
+                <li key={i}>
+                  <div className="flex items-baseline justify-between text-[12px]">
+                    <span className="label">
+                      {multi ? `Drill ${i + 1} · ` : ""}
+                      {r.session.drillName}
+                    </span>
+                    <span className={clsx("num", r.stage === "failed" ? "text-accent" : "text-ink-3")}>
+                      {r.stage === "uploading" ? `Saving to Drive · ${Math.round(r.uploadPct * 100)}%` : r.stage === "analyzing" ? "Vero is reviewing" : r.stage === "done" ? "Reviewed" : r.errorCode === "no_speech" ? "Silent tape" : "Stopped"}
+                    </span>
                   </div>
-                )}
-              </li>
-            ))}
+                  <div className="mt-2 h-[2px] bg-paper-3">
+                    <div className={clsx("h-full transition-[width] duration-300", r.stage === "uploading" ? "bg-ink" : "bg-accent")} style={{ width: r.stage === "uploading" ? `${Math.round(r.uploadPct * 100)}%` : "100%" }} />
+                  </div>
+                  {r.stage === "failed" && (
+                    <div className="mt-3 flex flex-col gap-2">
+                      <p className="text-[14px]">{r.errorCode === "no_speech" ? "Vero could not hear any speech on this tape, so it was not scored." : r.error}</p>
+                      {r.errorCode === "no_speech" ? (
+                        <button type="button" className="btn btn-sm self-start" onClick={() => rerecordBlock(i)}>
+                          Fix mic and re-record
+                        </button>
+                      ) : r.error?.includes("Drive") ? (
+                        <a href={`/api/auth/google?next=${encodeURIComponent("/today")}`} className="btn btn-sm self-start">
+                          Reconnect Google Drive
+                        </a>
+                      ) : r.error?.includes("Gemini") ? (
+                        <Link href="/settings#gemini" className="btn btn-sm self-start">
+                          Open Settings
+                        </Link>
+                      ) : (
+                        <button type="button" className="btn btn-sm self-start" onClick={() => retry(i)}>
+                          Retry
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </li>
+              ) : null,
+            )}
           </ul>
           {failed.length > 0 && (
             <button type="button" className="btn-ghost btn-block mt-6" onClick={finish}>
@@ -1006,11 +1236,11 @@ function PracticeFlow() {
   }
 
   // ---------------------------------------------------------------- FEEDBACK
-  if (phase === "feedback" && runs.length > 0 && runs.every((r) => r.stage === "done" && r.session.ai)) {
-    const totalXp = runs.reduce((a, r) => a + (r.xp ?? 0), 0);
+  if (phase === "feedback" && presentRuns.length > 0 && presentRuns.every((r) => r.stage === "done" && r.session.ai)) {
+    const totalXp = presentRuns.reduce((a, r) => a + (r.xp ?? 0), 0);
     const streak = liveStreak((latestProfile ?? profile).streak, localDateStr());
-    const improvedAny = runs.some((r, i) => {
-      const prevAi = i === 0 ? previous?.ai : runs[i - 1].session.ai;
+    const improvedAny = presentRuns.some((r, i) => {
+      const prevAi = i === 0 ? previous?.ai : presentRuns[i - 1].session.ai;
       const ai = r.session.ai!;
       if (ai.rubric) {
         const prevScore = previous?.ai?.rubric?.total;
@@ -1019,7 +1249,7 @@ function PracticeFlow() {
       return !prevAi || ai.scores.overall >= prevAi.scores.overall || ai.fillers.perMin < prevAi.fillers.perMin;
     });
     const celebrate = kind === "baseline" || improvedAny;
-    const last = runs[runs.length - 1].session.ai!;
+    const last = presentRuns[presentRuns.length - 1].session.ai!;
     return (
       <div className="max-w-[720px] pb-16">
         <Confetti fire={celebrate} />
@@ -1028,20 +1258,21 @@ function PracticeFlow() {
         <div className="mt-6 grid grid-cols-[112px_1fr] md:grid-cols-[150px_1fr] gap-4 md:gap-6 items-center rise">
           <Vero pose={celebrate ? "cheer" : "perched"} size={150} className="w-[112px] h-[112px] md:w-[150px] md:h-[150px]" />
           <div>
-            <p className="label">{kind === "baseline" ? "Baseline set" : multi ? `${runs.length} drills reviewed` : celebrate ? "Session complete" : "Logged"}</p>
+            <p className="label">{kind === "baseline" ? "Baseline set" : presentRuns.length > 1 ? `${presentRuns.length} drills reviewed` : celebrate ? "Session complete" : "Logged"}</p>
             <p className="font-display text-[22px] md:text-[28px] leading-tight tracking-[-0.02em] mt-2">{last.oneLiner}</p>
           </div>
         </div>
-        {runs.map((r, i) => {
-          const prevSession = i === 0 ? previous : runs[i - 1].session;
-          const earlier = [...runs.slice(0, i).map((x) => x.session), ...sessions];
-          const isLast = i === runs.length - 1;
+        {presentRuns.map((r, i) => {
+          const prevSession = i === 0 ? previous : presentRuns[i - 1].session;
+          const earlier = [...presentRuns.slice(0, i).map((x) => x.session), ...sessions];
+          const isLast = i === presentRuns.length - 1;
+          const showTitle = presentRuns.length > 1;
           return (
-            <div key={r.session.id} className={clsx(multi && "mt-10 hairline-strong pt-6")}>
-              {multi && (
+            <div key={r.session.id} className={clsx(showTitle && "mt-10 hairline-strong pt-6")}>
+              {showTitle && (
                 <div className="flex items-baseline justify-between mb-2">
                   <h2 className="font-display text-[22px] font-medium">
-                    Drill {i + 1} · {SKILL_MAP[r.session.focusSkillId ?? ""]?.name ?? ""}
+                    Drill {(r.session.blockIndex ?? i + 1)} · {SKILL_MAP[r.session.focusSkillId ?? ""]?.name ?? ""}
                   </h2>
                   <span className="label">{r.session.drillName}</span>
                 </div>
@@ -1053,7 +1284,7 @@ function PracticeFlow() {
                 average={averageScores(earlier)}
                 xpEarned={isLast ? totalXp : undefined}
                 streak={isLast ? streak : undefined}
-                hideLine={!multi}
+                hideLine={!showTitle}
                 className="mt-6"
               />
             </div>
@@ -1068,7 +1299,7 @@ function PracticeFlow() {
             className="btn-ghost btn-block"
             onClick={async () => {
               await saveNotes();
-              router.push(`/session/${runs[runs.length - 1].session.id}`);
+              router.push(`/session/${presentRuns[presentRuns.length - 1].session.id}`);
             }}
           >
             Watch the tape

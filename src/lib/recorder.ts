@@ -18,17 +18,74 @@ export function fileExtension(mimeType: string): string {
   return mimeType.includes("mp4") ? "mp4" : "webm";
 }
 
-export async function getSessionStream(): Promise<{ stream: MediaStream; hasVideo: boolean }> {
-  const video = { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } };
-  const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: false };
+// ---------------------------------------------------------------------------
+// Device choice. A headset mic that isn't plugged in is the classic silent-tape bug.
+// ---------------------------------------------------------------------------
+export interface DevicePrefs {
+  audioId?: string;
+  videoId?: string;
+}
+
+const PREFS_KEY = "verve.devices";
+
+export function loadDevicePrefs(): DevicePrefs {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video, audio });
-    return { stream, hasVideo: true };
+    return JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as DevicePrefs;
   } catch {
-    // Fall back to audio-only so coaching still works.
-    const stream = await navigator.mediaDevices.getUserMedia({ audio });
-    return { stream, hasVideo: false };
+    return {};
   }
+}
+
+export function saveDevicePrefs(p: DevicePrefs) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+  } catch {}
+}
+
+export interface DeviceLists {
+  audio: MediaDeviceInfo[];
+  video: MediaDeviceInfo[];
+}
+
+/** Labels are only populated once a stream has been granted. */
+export async function listDevices(): Promise<DeviceLists> {
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    return { audio: all.filter((d) => d.kind === "audioinput"), video: all.filter((d) => d.kind === "videoinput") };
+  } catch {
+    return { audio: [], video: [] };
+  }
+}
+
+export function activeDeviceIds(stream: MediaStream | null): DevicePrefs {
+  if (!stream) return {};
+  return {
+    audioId: stream.getAudioTracks()[0]?.getSettings().deviceId,
+    videoId: stream.getVideoTracks()[0]?.getSettings().deviceId,
+  };
+}
+
+export async function getSessionStream(prefs: DevicePrefs = {}): Promise<{ stream: MediaStream; hasVideo: boolean }> {
+  const video: MediaTrackConstraints = { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 } };
+  const audio: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true, autoGainControl: false };
+  if (prefs.videoId) video.deviceId = { exact: prefs.videoId };
+  if (prefs.audioId) audio.deviceId = { exact: prefs.audioId };
+  const attempts: Array<{ video: MediaTrackConstraints | false; audio: MediaTrackConstraints }> = [
+    { video, audio },
+    // A remembered device may be unplugged: fall back to defaults.
+    { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } },
+    { video: false, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } },
+  ];
+  let lastErr: unknown;
+  for (const a of attempts) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: a.video, audio: a.audio });
+      return { stream, hasVideo: stream.getVideoTracks().length > 0 };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
 }
 
 export class Recorder {
@@ -77,6 +134,20 @@ export class Recorder {
       if (rec.state !== "inactive") rec.stop();
       else rec.onstop?.(new Event("stop"));
     });
+  }
+
+  /** Throw the take away without producing a blob. */
+  discard() {
+    const rec = this.rec;
+    this.rec = null;
+    this.chunks = [];
+    try {
+      if (rec && rec.state !== "inactive") {
+        rec.ondataavailable = null;
+        rec.onstop = null;
+        rec.stop();
+      }
+    } catch {}
   }
 }
 

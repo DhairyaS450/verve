@@ -112,6 +112,11 @@ export async function patchSession(uid: string, id: string, patch: Partial<Sessi
   await setDoc(doc(firestore(), `${userDocPath(uid)}/sessions/${id}`), stripUndefined(patch), { merge: true });
 }
 
+/** Remove a placeholder session (e.g. a silent take that was never analyzed). */
+export async function deleteSession(uid: string, id: string) {
+  await deleteDoc(doc(firestore(), `${userDocPath(uid)}/sessions/${id}`)).catch(() => {});
+}
+
 export async function getSession(uid: string, id: string): Promise<SessionDoc | null> {
   const snap = await getDoc(doc(firestore(), `${userDocPath(uid)}/sessions/${id}`));
   return snap.exists() ? (snap.data() as SessionDoc) : null;

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { analyzeMedia } from "@/lib/server/gemini";
+import { NoSpeechError, analyzeMedia } from "@/lib/server/gemini";
 import { verifyFirebaseIdToken } from "@/lib/server/verify-user";
 import { decrypt } from "@/lib/server/crypto";
 import { looksLikeKeyError, sharedKeyAllowed } from "@/lib/server/keys";
@@ -99,6 +99,12 @@ export async function POST(req: Request) {
   }
   if (!apiKey) return NextResponse.json({ error: "key_required" }, { status: 402 });
 
+  // Deterministic guard: the browser measured the mic during the take. A dead mic never reaches Gemini.
+  const audio = context.audio as { durationSec?: number; speechSeconds?: number } | undefined;
+  if (audio && typeof audio.speechSeconds === "number" && (audio.durationSec ?? 0) >= 8 && audio.speechSeconds < 1.5) {
+    return NextResponse.json({ error: "no_speech" }, { status: 422 });
+  }
+
   try {
     const media = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`, {
       headers: { authorization: `Bearer ${accessToken}` },
@@ -115,6 +121,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ analysis });
   } catch (e) {
     const err = e as Error;
+    if (err instanceof NoSpeechError) return NextResponse.json({ error: "no_speech" }, { status: 422 });
     console.error("analyze", err);
     if (ownKey && looksLikeKeyError(err.message ?? "")) return NextResponse.json({ error: "key_invalid" }, { status: 402 });
     return NextResponse.json({ error: "analysis_failed", message: err.message }, { status: 500 });

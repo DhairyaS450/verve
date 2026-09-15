@@ -71,6 +71,8 @@ export interface UserProfile {
 
 export interface AudioMetrics {
   durationSec: number;
+  /** Seconds above the silence gate. Near zero means a dead microphone. */
+  speechSeconds?: number;
   speakingRatio: number;
   pauseCount: number;
   longestPauseSec: number;

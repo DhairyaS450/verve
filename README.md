@@ -7,12 +7,13 @@ Verve is a Duolingo-style trainer for speaking: warm the voice, spin a random to
 ## How it works
 
 1. **Today** — one focus skill, one warmup, one drill, one START button. Under ten seconds to begin.
-2. **Warmup** (2–3 min) — pen-in-mouth reads, sirens, volume dials, word association, yes-and…
-3. **Drill** (1–10 min) — topic wheel, PREP / 3-2-1 / What-So-What-Now-What, story formula, tough questions, toasts, keynotes. Recorded on camera with a live waveform.
-4. **Review** — the recording uploads straight to a `Verve` folder in **your Google Drive** (nothing is stored on Verve's servers). While it uploads you jot a one-line reflection.
-5. **Vero's verdict** — verbatim transcript, fillers per minute, pace, vocal variety, six scores, one fix, one win, timestamped moments. Vero tags what it sees (`src/content/observations.ts`) and marks one-off slips as incidents.
-6. **The coach** (`src/lib/coach.ts`) — deterministic. It looks across your last six sessions, not one clip: recurring tags and the weakest scoring dimension pick the next focus, a focus is held for a three-session block unless it clearly improves, and incidents (a timer cut-off, one lost word) never become a focus. Vocal variety is anchored to measured pitch spread so scores move.
-6. **Progress** — trend lines against target bands, per-branch skill levels, full history with playback from Drive.
+2. **Mic check** (10 s) — say one sentence. The session does not start until Verve hears a voice on the chosen microphone, so a dead headset mic ends here, not twelve minutes later. Recording shows a live mic signal and a "Stop and fix mic" bail-out.
+3. **Warmup** (2–3 min) — pen-in-mouth reads, sirens, volume dials, word association, yes-and…
+4. **Drill** (1–10 min) — topic wheel, PREP / 3-2-1 / What-So-What-Now-What, story formula, tough questions, toasts, keynotes. Recorded on camera with a live waveform.
+5. **Review** — the recording uploads straight to a `Verve` folder in **your Google Drive** (nothing is stored on Verve's servers). While it uploads you jot a one-line reflection.
+6. **Vero's verdict** — a silent take is refused twice (a local loudness gate before upload, then a narrow "is anyone talking?" question to Gemini before the review) so Vero never invents a transcript. Then: verbatim transcript, fillers per minute, pace, vocal variety, six scores, one fix, one win, timestamped moments. Vero tags what it sees (`src/content/observations.ts`) and marks one-off slips as incidents.
+7. **The coach** (`src/lib/coach.ts`) — deterministic. It looks across your last six sessions, not one clip: recurring tags and the weakest scoring dimension pick the next focus, a focus is held for a three-session block unless it clearly improves, and incidents (a timer cut-off, one lost word) never become a focus. Vocal variety is anchored to measured pitch spread so scores move.
+8. **Progress** — trend lines against target bands, per-branch skill levels, full history with playback from Drive.
 
 Deterministic voice metrics (pauses, pitch spread in semitones, volume range, variety score) are computed in the browser during recording and handed to Vero alongside the video.
 

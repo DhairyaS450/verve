@@ -10,6 +10,18 @@ import { firstName } from "./format";
 import { historyForPrompt } from "./coach";
 import { FORMATS, bandNamesFor, rubricFor } from "@/content/roleplay";
 
+export class AnalysisError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+  ) {
+    super(message);
+    this.name = "AnalysisError";
+  }
+}
+
+export const NO_SPEECH_MESSAGE = "No speech detected on the recording.";
+
 export async function uploadRecording(opts: {
   profile: UserProfile;
   session: SessionDoc;
@@ -94,15 +106,23 @@ export async function analyzeSession(opts: {
   });
   if (!res.ok) {
     let msg = `analysis failed (${res.status})`;
+    let code = "analysis_failed";
     try {
       const j = await res.json();
-      if (j?.error === "key_required") msg = "Vero needs a Gemini API key. Add yours in Settings.";
-      else if (j?.error === "key_invalid") msg = "Your Gemini API key was rejected. Update it in Settings.";
-      else if (j?.message) msg = j.message;
+      if (j?.error === "no_speech") {
+        msg = NO_SPEECH_MESSAGE;
+        code = "no_speech";
+      } else if (j?.error === "key_required") {
+        msg = "Vero needs a Gemini API key. Add yours in Settings.";
+        code = "key_required";
+      } else if (j?.error === "key_invalid") {
+        msg = "Your Gemini API key was rejected. Update it in Settings.";
+        code = "key_invalid";
+      } else if (j?.message) msg = j.message;
       else if (j?.error) msg = j.error;
     } catch {}
     await patchSession(profile.uid, session.id, { status: "failed", error: msg });
-    throw new Error(msg);
+    throw new AnalysisError(msg, code);
   }
   const { analysis } = (await res.json()) as { analysis: VeroAnalysis };
   const committed = await commitSessionResults({

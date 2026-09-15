@@ -1,5 +1,5 @@
 import "server-only";
-import { GoogleGenAI, Type, createPartFromUri, createUserContent } from "@google/genai";
+import { GoogleGenAI, Type, createPartFromUri, createUserContent, type Part } from "@google/genai";
 import { z } from "zod";
 import { env, optionalEnv } from "./env";
 import { SKILLS, SKILL_MAP } from "@/content/skills";
@@ -49,11 +49,19 @@ export interface AnalyzeContext {
 
 const scoreField = { type: Type.NUMBER, description: "1-10" } as const;
 
+export class NoSpeechError extends Error {
+  constructor() {
+    super("No speech detected in the recording.");
+    this.name = "NoSpeechError";
+  }
+}
+
 const RESPONSE_SCHEMA = {
   type: Type.OBJECT,
-  required: ["transcript", "wordCount", "fillers", "scores", "observations", "topFix", "win", "moments", "nextFocusSkillId", "oneLiner"],
+  required: ["noSpeech", "transcript", "wordCount", "fillers", "scores", "observations", "topFix", "win", "moments", "nextFocusSkillId", "oneLiner"],
   properties: {
-    transcript: { type: Type.STRING, description: "Verbatim transcript including filler words like um, uh, like, you know." },
+    noSpeech: { type: Type.BOOLEAN, description: "true if the recording contains no intelligible speech: silence, noise only, or a missing audio track. Then transcript is empty and nothing is invented." },
+    transcript: { type: Type.STRING, description: "Verbatim transcript including filler words like um, uh, like, you know. Empty if noSpeech." },
     wordCount: { type: Type.INTEGER },
     fillers: {
       type: Type.OBJECT,
@@ -159,6 +167,7 @@ const RESPONSE_SCHEMA = {
 };
 
 const analysisSchema = z.object({
+  noSpeech: z.boolean().optional().default(false),
   transcript: z.string(),
   wordCount: z.number(),
   fillers: z.object({ total: z.number(), top: z.array(z.object({ word: z.string(), count: z.number() })) }),
@@ -215,6 +224,8 @@ Role-play sessions (DECA / FBLA), when a case and rubric are provided:
 - Weigh the judge questions: they were shown on screen at the listed times; judge the answers that follow them.
 - Roleplay observation tags (pi-missed, pi-shallow, no-greeting, no-recommendation, no-close, vague-plan, weak-qa, no-business-vocab, ran-short, ran-long, no-alternatives) exist for this purpose; use them, and pick the topFix from what cost the most rubric points.
 - Do not invent facts about the company beyond the case. Judge what was said.
+
+Silence rule (absolute): if you cannot hear intelligible speech from the speaker (silence, room noise, a muted or missing microphone), set noSpeech=true, leave the transcript empty, and do NOT write anything the speaker "said". Never invent a transcript or score words you did not hear.
 
 Output rules:
 - observations: 3–6 items, tags ONLY from the catalog provided, each with severity 1–3, incident true/false, and ≤ 12 words of evidence.
@@ -300,6 +311,45 @@ function varietyFromSpread(st: number): number {
   return 9;
 }
 
+interface SpeechPresence {
+  speech: boolean;
+  seconds: number;
+  words: number;
+  note?: string;
+}
+
+const PRESENCE_SCHEMA = {
+  type: Type.OBJECT,
+  required: ["speech", "seconds", "words", "note"],
+  properties: {
+    speech: { type: Type.BOOLEAN, description: "true only if a human voice speaking words is audible" },
+    seconds: { type: Type.NUMBER, description: "seconds of the recording that contain speech; 0 if none" },
+    words: { type: Type.INTEGER, description: "approximate number of words spoken; 0 if none" },
+    note: { type: Type.STRING, description: "what the audio contains, at most 12 words" },
+  },
+};
+
+const presenceSchema = z.object({ speech: z.boolean(), seconds: z.number().min(0), words: z.number().min(0), note: z.string().optional() });
+
+/**
+ * One narrow question before the full review: is anyone talking?
+ * The analysis schema demands a transcript and scores, and a flash model will invent both for a silent
+ * file no matter what the prompt says. Here silence is an expected answer, not a hole to fill.
+ */
+async function detectSpeech(ai: GoogleGenAI, filePart: Part, model: string): Promise<SpeechPresence> {
+  const res = await ai.models.generateContent({
+    model,
+    contents: createUserContent([
+      filePart,
+      "Listen to the whole recording. Report whether a human voice is speaking words. Silence, hiss, hum, room noise, keyboard clicks or music without a voice all count as no speech. Do not guess what someone might have said: if you hear no words, answer speech=false, seconds=0, words=0.",
+    ]),
+    config: { responseMimeType: "application/json", responseSchema: PRESENCE_SCHEMA, temperature: 0 },
+  });
+  const parsed = presenceSchema.parse(JSON.parse(stripFences(res.text ?? "")));
+  console.log(`[gemini] speech presence (${model}): speech=${parsed.speech} seconds=${parsed.seconds} words=${parsed.words} · ${parsed.note ?? ""}`);
+  return parsed;
+}
+
 export async function analyzeMedia(bytes: Buffer | Uint8Array, mimeType: string, ctx: AnalyzeContext, apiKey?: string): Promise<VeroAnalysis> {
   const ai = new GoogleGenAI({ apiKey: apiKey ?? env("GEMINI_API_KEY") });
   const primary = optionalEnv("GEMINI_MODEL") ?? "gemini-3.8-flash";
@@ -311,7 +361,18 @@ export async function analyzeMedia(bytes: Buffer | Uint8Array, mimeType: string,
   const active = await waitForActive(ai, uploaded.name);
   if (!active.uri || !active.mimeType) throw new Error("Gemini file missing uri");
 
-  const contents = createUserContent([createPartFromUri(active.uri, active.mimeType), userPrompt(ctx)]);
+  const filePart = createPartFromUri(active.uri, active.mimeType);
+  // Gate before the review. Any take long enough to be scored gets the presence check; a failure of the
+  // check itself (quota, outage) must not block a real tape, so it degrades to "unknown".
+  if (ctx.durationSec >= 8) {
+    const presence = await detectSpeech(ai, filePart, primary).catch(() => detectSpeech(ai, filePart, fallback).catch(() => null));
+    if (presence && (!presence.speech || presence.seconds < 2)) {
+      ai.files.delete({ name: uploaded.name }).catch(() => {});
+      throw new NoSpeechError();
+    }
+  }
+
+  const contents = createUserContent([filePart, userPrompt(ctx)]);
   const run = async (model: string) => {
     const res = await ai.models.generateContent({
       model,
@@ -340,6 +401,8 @@ export async function analyzeMedia(bytes: Buffer | Uint8Array, mimeType: string,
   const parsed = analysisSchema.parse(JSON.parse(stripFences(out.text)));
   const minutes = Math.max(0.25, ctx.durationSec / 60);
   const wordCount = parsed.wordCount || parsed.transcript.split(/\s+/).filter(Boolean).length;
+  // A silent tape must never become feedback.
+  if (parsed.noSpeech || (ctx.durationSec >= 15 && parsed.transcript.trim().split(/\s+/).filter(Boolean).length < 5)) throw new NoSpeechError();
   const fillersTotal = parsed.fillers.total;
   const clamp10 = (n: number) => Math.max(1, Math.min(10, Math.round(n * 10) / 10));
 

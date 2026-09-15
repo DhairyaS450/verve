@@ -27,6 +27,10 @@ export class LiveAudioAnalyzer {
   private startAt = 0;
   private stopped = false;
   public level = 0;
+  /** Frames above the silence gate, and when the last one happened. Read live by the mic check. */
+  public speechFrames = 0;
+  public totalFrames = 0;
+  public lastSpeechAt: number | null = null;
 
   constructor(private stream: MediaStream) {}
 
@@ -50,7 +54,12 @@ export class LiveAudioAnalyzer {
       this.level = Math.min(1, rms * 6);
       const db = 20 * Math.log10(rms + 1e-9);
       let f0: number | null = null;
-      if (db > SILENCE_DB) f0 = autocorrelate(this.buf, this.ctx.sampleRate);
+      this.totalFrames += 1;
+      if (db > SILENCE_DB) {
+        f0 = autocorrelate(this.buf, this.ctx.sampleRate);
+        this.speechFrames += 1;
+        this.lastSpeechAt = performance.now();
+      }
       this.frames.push({ t: (performance.now() - this.startAt) / 1000, rms, f0 });
     };
     this.timer = window.setInterval(tick, 50);
@@ -60,6 +69,25 @@ export class LiveAudioAnalyzer {
   /** Time-domain snapshot for waveform rendering. */
   waveform(out: Float32Array<ArrayBuffer>) {
     this.analyser?.getFloatTimeDomainData(out);
+  }
+
+  /** Seconds of audio above the silence gate so far. A dead mic stays at 0. */
+  get speechSeconds(): number {
+    return this.speechFrames * 0.05;
+  }
+
+  /** Seconds since the last frame with a voice in it (or since start, if none yet). */
+  silentFor(): number {
+    const since = this.lastSpeechAt ?? this.startAt;
+    return since ? (performance.now() - since) / 1000 : 0;
+  }
+
+  /** Reset the live counters (e.g. after switching microphones). */
+  resetCounters() {
+    this.speechFrames = 0;
+    this.totalFrames = 0;
+    this.lastSpeechAt = null;
+    this.startAt = performance.now();
   }
 
   stop(): AudioMetrics {
@@ -176,6 +204,7 @@ export function computeMetrics(frames: Frame[]): AudioMetrics {
   const envelope = downsample(frames.map((f) => Math.min(1, f.rms * 6)), 160);
   return {
     durationSec: Math.round(durationSec * 10) / 10,
+    speechSeconds: Math.round(speechFrames.length * 0.05 * 10) / 10,
     speakingRatio: Math.round(speakingRatio * 100) / 100,
     pauseCount: pauses.length,
     longestPauseSec: pauses.length ? Math.round(Math.max(...pauses) * 10) / 10 : 0,
