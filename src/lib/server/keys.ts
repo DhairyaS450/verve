@@ -27,6 +27,11 @@ export async function validateGeminiKey(key: string): Promise<{ ok: boolean; sta
   }
 }
 
+/** The key is valid but cannot pay for this call right now: prepaid credits gone, quota used up, or rate limited. */
+export function looksLikeQuotaError(err: { message?: string; status?: number }): boolean {
+  return err.status === 402 || err.status === 429 || /RESOURCE_EXHAUSTED|prepayment credits|quota|billing/i.test(err.message ?? "");
+}
+
 export function looksLikeKeyError(message: string): boolean {
   return /API key|API_KEY_INVALID|PERMISSION_DENIED|403|invalid.*key|unregistered callers|leaked/i.test(message);
 }

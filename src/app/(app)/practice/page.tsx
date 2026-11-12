@@ -484,6 +484,7 @@ function PracticeFlow() {
           frameworkId: drill.frameworkId,
           prompt: material?.prompt,
           promptExtra: material?.promptExtra,
+          passageId: material?.passage?.id,
           roleplay,
           status: "recording",
         };
@@ -1184,23 +1185,31 @@ function PracticeFlow() {
                   {r.stage === "failed" && (
                     <div className="mt-3 flex flex-col gap-2">
                       <p className="text-[14px]">{r.errorCode === "no_speech" ? "Vero could not hear any speech on this tape, so it was not scored." : r.error}</p>
-                      {r.errorCode === "no_speech" ? (
-                        <button type="button" className="btn btn-sm self-start" onClick={() => rerecordBlock(i)}>
-                          Fix mic and re-record
-                        </button>
-                      ) : r.error?.includes("Drive") ? (
-                        <a href={`/api/auth/google?next=${encodeURIComponent("/today")}`} className="btn btn-sm self-start">
-                          Reconnect Google Drive
-                        </a>
-                      ) : r.error?.includes("Gemini") ? (
-                        <Link href="/settings#gemini" className="btn btn-sm self-start">
-                          Open Settings
-                        </Link>
-                      ) : (
-                        <button type="button" className="btn btn-sm self-start" onClick={() => retry(i)}>
-                          Retry
-                        </button>
-                      )}
+                      <div className="flex flex-wrap gap-2">
+                        {r.errorCode === "no_speech" ? (
+                          <button type="button" className="btn btn-sm" onClick={() => rerecordBlock(i)}>
+                            Fix mic and re-record
+                          </button>
+                        ) : r.errorCode === "drive" || r.error?.includes("Drive") ? (
+                          <a href={`/api/auth/google?next=${encodeURIComponent("/today")}`} className="btn btn-sm">
+                            Reconnect Google Drive
+                          </a>
+                        ) : (
+                          <>
+                            {/* A missing or rejected key cannot be retried into working; everything else can. */}
+                            {r.errorCode !== "key_required" && r.errorCode !== "key_invalid" && (
+                              <button type="button" className="btn btn-sm" onClick={() => retry(i)}>
+                                Retry
+                              </button>
+                            )}
+                            {(r.errorCode === "key_required" || r.errorCode === "key_invalid" || r.errorCode === "quota") && (
+                              <Link href="/settings#gemini" className={r.errorCode === "quota" ? "btn-ghost btn-sm" : "btn btn-sm"}>
+                                Open Settings
+                              </Link>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
                   )}
                 </li>

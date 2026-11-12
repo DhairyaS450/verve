@@ -283,6 +283,15 @@ export default function Preview() {
           />
           <SessionList sessions={[MOCK_SESSION, MOCK_PREV]} className="mt-10" />
           <Transcript text={MOCK_AI.transcript} className="mt-10" />
+          <p className="label text-ink-3 mt-8">read-aloud take: the page, cut where the speaker stopped</p>
+          <Transcript
+            text="Practice is boring. Practice is quiet. Practice is the pen in your mouth, the timer on the table, the tape you don't want to watch. Nobody claps. Nobody sees it. And then, one day, in a room …"
+            kind="passage"
+            slips="0:02 added 'um'; 0:08 skipped 'the' before 'timer'."
+            className="mt-1"
+          />
+          <p className="label text-ink-3 mt-8">recited published text, described instead of typed out</p>
+          <Transcript text="So, um, the speech that moved me most. [recites the close of a famous inaugural address, about 55 words] And that line still, like, gets me every time." kind="summarized" className="mt-1" />
         </>
       )}
       {tab === "skills" && <SkillTree skills={MOCK_SKILLS} focusId="fillers" />}

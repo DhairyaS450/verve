@@ -6,15 +6,24 @@ import clsx from "clsx";
 const FILLERS = new Set(["um", "uh", "uhm", "er", "erm", "ah", "hmm", "like", "basically", "literally", "actually", "so", "right", "okay", "ok"]);
 const PHRASES = ["you know", "kind of", "sort of", "i mean", "you see"];
 
-/** Transcript with fillers highlighted. Collapsed by default. */
-export function Transcript({ text, className }: { text: string; className?: string }) {
+/**
+ * Transcript with fillers highlighted. Collapsed by default.
+ * A read-aloud take shows the page instead of a retyped transcript (kind "passage"), with what differed listed under it;
+ * the words on the page are not the speaker's, so nothing in them is marked as a filler.
+ */
+export function Transcript({ text, kind, slips, className }: { text: string; kind?: "passage" | "summarized"; slips?: string; className?: string }) {
   const [open, setOpen] = useState(false);
-  const tokens = highlight(text);
+  const tokens = kind === "passage" ? [{ text, filler: false }] : highlight(text);
   return (
     <div className={className}>
       <button type="button" onClick={() => setOpen((v) => !v)} className="label-ink min-h-[44px] flex items-center gap-2" aria-expanded={open}>
-        Transcript <span className="text-ink-3">{open ? "hide" : "show"}</span>
+        {kind === "passage" ? "Passage as read" : "Transcript"} <span className="text-ink-3">{open ? "hide" : "show"}</span>
       </button>
+      {open && kind && (
+        <p className="mt-1 text-[12px] text-ink-3 rise">
+          {kind === "passage" ? "Read-aloud takes are not retyped. This is the page, up to where you stopped." : "Published text you recited is described in brackets, not typed out."}
+        </p>
+      )}
       {open && (
         <p className="mt-2 text-[15px] leading-[1.7] text-ink-2 rise">
           {tokens.map((t, i) =>
@@ -26,6 +35,12 @@ export function Transcript({ text, className }: { text: string; className?: stri
               <span key={i}>{t.text}</span>
             ),
           )}
+        </p>
+      )}
+      {open && slips && (
+        <p className="mt-3 text-[13px] leading-[1.6] text-ink-2 rise">
+          <span className="label mr-2">Off the page</span>
+          {slips}
         </p>
       )}
     </div>

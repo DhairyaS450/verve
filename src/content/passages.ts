@@ -353,6 +353,19 @@ export const PARAGRAPHS = [
   "Filler words are not a vocabulary problem. They are a timing problem. You say 'um' when your mouth is ready before your brain is. The fix is not to think faster. The fix is to close your mouth, breathe in, and let the thought finish. You cannot say 'um' while inhaling.",
 ];
 
+export const PASSAGE_MAP: Record<string, Passage> = Object.fromEntries(PASSAGES.map((p) => [p.id, p]));
+
+/** The headline a read-aloud drill shows for a passage. */
+export function passagePrompt(p: Passage): string {
+  return `Read: ${p.title}`;
+}
+
+/** By id; sessions saved before passage ids were stored are matched on their headline. */
+export function findPassage(id?: string, prompt?: string): Passage | undefined {
+  if (id && PASSAGE_MAP[id]) return PASSAGE_MAP[id];
+  return prompt ? PASSAGES.find((p) => passagePrompt(p) === prompt) : undefined;
+}
+
 export function randomPassage(exclude: string[] = []): Passage {
   const pool = PASSAGES.filter((p) => !exclude.includes(p.id));
   const src = pool.length ? pool : PASSAGES;

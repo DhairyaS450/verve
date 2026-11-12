@@ -149,6 +149,13 @@ export interface FocusBlock {
 
 export interface VeroAnalysis {
   transcript: string;
+  /**
+   * Set when the transcript is not word for word. "passage": a read-aloud drill, so this is the page text up to
+   * where the speaker stopped. "summarized": published text the speaker recited is described in brackets.
+   */
+  transcriptKind?: "passage" | "summarized";
+  /** Read-aloud drills: what differed from the page (fillers, skipped or misread words), with timestamps */
+  slips?: string;
   wordCount: number;
   wpm: number;
   fillers: { total: number; perMin: number; top: FillerStat[] };
@@ -191,6 +198,8 @@ export interface SessionDoc {
   frameworkId?: string;
   prompt?: string;
   promptExtra?: string[];
+  /** Read-aloud drills: which passage was on screen */
+  passageId?: string;
   roleplay?: SessionRoleplay;
   recording?: {
     driveFileId: string;

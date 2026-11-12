@@ -10,13 +10,18 @@ export const maxDuration = 300;
 /** Development only: run the Vero pipeline on a local file with a synthetic history. */
 export async function POST(req: Request) {
   if (process.env.NODE_ENV === "production") return NextResponse.json({ error: "not_found" }, { status: 404 });
-  const { path, mimeType, drillId = "m-321", durationSec = 60, endedBy = "timer", caseId } = (await req.json()) as {
+  const { path, mimeType, drillId = "m-321", durationSec = 60, endedBy = "timer", caseId, prompt, focusSkillId, frameworkId, passageId } = (await req.json()) as {
     path: string;
     mimeType: string;
     drillId?: string;
     durationSec?: number;
     endedBy?: "timer" | "user";
     caseId?: string;
+    /** Overrides for drills that are not the default 3-2-1 on "Traffic cone". Pass frameworkId "" for none. */
+    prompt?: string;
+    focusSkillId?: string;
+    frameworkId?: string;
+    passageId?: string;
   };
   const started = Date.now();
   const c = caseId ? CASE_MAP[caseId] : undefined;
@@ -25,9 +30,10 @@ export async function POST(req: Request) {
     const analysis = await analyzeMedia(bytes, mimeType, {
       drillId,
       kind: "daily",
-      prompt: c ? c.title : "Traffic cone",
-      focusSkillId: c ? "rp-pis" : "fillers",
-      frameworkId: c ? undefined : "three-two-one",
+      prompt: prompt ?? (c ? c.title : "Traffic cone"),
+      passageId,
+      focusSkillId: focusSkillId ?? (c ? "rp-pis" : "fillers"),
+      frameworkId: frameworkId !== undefined ? frameworkId || undefined : c ? undefined : "three-two-one",
       durationSec,
       endedBy,
       roleplay: c

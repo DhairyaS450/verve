@@ -145,7 +145,7 @@ export default function SessionPage() {
         {session.ai ? (
           <>
             <FeedbackView session={session} previous={previous} previousSessions={earlier} average={averageScores(earlier)} xpEarned={session.xp} />
-            <Transcript text={session.ai.transcript} className="mt-10" />
+            <Transcript text={session.ai.transcript} kind={session.ai.transcriptKind} slips={session.ai.slips} className="mt-10" />
           </>
         ) : (
           <div className="hairline-strong pt-5">

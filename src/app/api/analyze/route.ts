@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { NoSpeechError, analyzeMedia } from "@/lib/server/gemini";
+import { NoSpeechError, ReviewError, analyzeMedia } from "@/lib/server/gemini";
 import { verifyFirebaseIdToken } from "@/lib/server/verify-user";
 import { decrypt } from "@/lib/server/crypto";
-import { looksLikeKeyError, sharedKeyAllowed } from "@/lib/server/keys";
+import { looksLikeKeyError, looksLikeQuotaError, sharedKeyAllowed } from "@/lib/server/keys";
 import { optionalEnv } from "@/lib/server/env";
 
 export const runtime = "nodejs";
@@ -21,6 +21,7 @@ const bodySchema = z.object({
     kind: z.enum(["daily", "free", "baseline"]),
     prompt: z.string().optional(),
     promptExtra: z.array(z.string()).optional(),
+    passageId: z.string().max(60).optional(),
     focusSkillId: z.string().optional(),
     frameworkId: z.string().optional(),
     durationSec: z.number().positive(),
@@ -120,9 +121,12 @@ export async function POST(req: Request) {
     const analysis = await analyzeMedia(bytes, mimeType, context, apiKey);
     return NextResponse.json({ analysis });
   } catch (e) {
-    const err = e as Error;
+    const err = e as Error & { status?: number };
     if (err instanceof NoSpeechError) return NextResponse.json({ error: "no_speech" }, { status: 422 });
     console.error("analyze", err);
+    // Gemini answered, but with nothing Vero can use. The client turns these into plain words.
+    if (err instanceof ReviewError) return NextResponse.json({ error: err.code === "recitation" ? "review_blocked" : "review_empty" }, { status: 502 });
+    if (looksLikeQuotaError(err)) return NextResponse.json({ error: "quota" }, { status: 402 });
     if (ownKey && looksLikeKeyError(err.message ?? "")) return NextResponse.json({ error: "key_invalid" }, { status: 402 });
     return NextResponse.json({ error: "analysis_failed", message: err.message }, { status: 500 });
   }

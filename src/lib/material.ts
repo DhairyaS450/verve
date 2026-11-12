@@ -9,6 +9,7 @@ import {
   TWISTERS,
   YES_AND_STATEMENTS,
   randomPassage,
+  passagePrompt,
 } from "@/content/passages";
 import { ABSTRACT_WORDS, ASSOCIATION_WORDS, OBJECTS, TOPICS, pickMany, pickTopic } from "@/content/topics";
 import { CASE_MAP, loadCustomCase, pickCase, type RoleplayCase } from "@/content/cases";
@@ -64,7 +65,7 @@ export function buildMaterial(drill: Drill, recentPrompts: string[] = [], opts: 
   switch (m.kind) {
     case "passage":
       out.passage = randomPassage();
-      out.prompt = `Read: ${out.passage.title}`;
+      out.prompt = passagePrompt(out.passage);
       break;
     case "twisters":
       out.twisters = pickMany(TWISTERS, m.count ?? 3);

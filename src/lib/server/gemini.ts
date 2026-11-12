@@ -6,6 +6,9 @@ import { SKILLS, SKILL_MAP } from "@/content/skills";
 import { FRAMEWORK_MAP } from "@/content/frameworks";
 import { DRILL_MAP } from "@/content/drills";
 import { OBSERVATION_TAGS, TAG_IDS, TAG_MAP } from "@/content/observations";
+import { findPassage } from "@/content/passages";
+import { passageAsRead } from "../passage-read";
+import type { Passage } from "@/content/types";
 import type { AudioMetrics, Observation, RubricResult, VeroAnalysis } from "../types";
 
 export interface RoleplayForPrompt {
@@ -36,6 +39,8 @@ export interface AnalyzeContext {
   kind: "daily" | "free" | "baseline";
   prompt?: string;
   promptExtra?: string[];
+  /** Read-aloud drills: the passage that was on screen. Older sessions are matched on their prompt instead. */
+  passageId?: string;
   focusSkillId?: string;
   frameworkId?: string;
   durationSec: number;
@@ -55,6 +60,28 @@ export class NoSpeechError extends Error {
     this.name = "NoSpeechError";
   }
 }
+
+/** The review itself could not be produced: Gemini blocked it, or sent back nothing usable. */
+export class ReviewError extends Error {
+  constructor(
+    public code: "recitation" | "empty",
+    detail: string,
+  ) {
+    super(code === "recitation" ? `Gemini blocked the review as recitation (${detail}).` : `Gemini returned no usable review (${detail}).`);
+    this.name = "ReviewError";
+  }
+}
+
+/**
+ * How the transcript is asked for.
+ * - verbatim: word for word. The default.
+ * - read-aloud: the passage on screen is known, so it is never typed out; Vero reports how the read went against it.
+ * - no-recite: verbatim, except that published text the speaker recites is described in brackets.
+ *
+ * Gemini ends a response with finishReason RECITATION and an empty body when the answer would reproduce a long
+ * run of published text. A verbatim transcript of someone reading a famous speech is exactly that.
+ */
+type TranscriptMode = "verbatim" | "read-aloud" | "no-recite";
 
 const RESPONSE_SCHEMA = {
   type: Type.OBJECT,
@@ -166,9 +193,50 @@ const RESPONSE_SCHEMA = {
   },
 };
 
+const READING_SCHEMA = {
+  type: Type.OBJECT,
+  description: "Read-aloud drill: how the read went against the passage on screen. Never write the passage out.",
+  required: ["finished", "readTo", "slips"],
+  properties: {
+    finished: { type: Type.BOOLEAN, description: "true if the speaker read through to the final word of the passage" },
+    readTo: { type: Type.STRING, description: "The last four words of the passage that the speaker actually said, copied exactly from the passage." },
+    slips: {
+      type: Type.STRING,
+      description: "≤ 40 words. What differed from the page, with timestamps: fillers, added, skipped or misread words, restarts. 'Clean read.' if nothing differed.",
+    },
+  },
+};
+
+function responseSchema(mode: TranscriptMode) {
+  if (mode === "verbatim") return RESPONSE_SCHEMA;
+  if (mode === "read-aloud") {
+    return {
+      ...RESPONSE_SCHEMA,
+      required: [...RESPONSE_SCHEMA.required, "reading"],
+      properties: {
+        ...RESPONSE_SCHEMA.properties,
+        transcript: { type: Type.STRING, description: "Leave empty. The passage is known; do not write it out." },
+        reading: READING_SCHEMA,
+      },
+    };
+  }
+  return {
+    ...RESPONSE_SCHEMA,
+    properties: {
+      ...RESPONSE_SCHEMA.properties,
+      transcript: {
+        type: Type.STRING,
+        description:
+          "Verbatim for the speaker's own words, fillers included. Published text the speaker recites is NOT written out: one bracketed description replaces the whole stretch. Empty if noSpeech.",
+      },
+    },
+  };
+}
+
 const analysisSchema = z.object({
   noSpeech: z.boolean().optional().default(false),
   transcript: z.string(),
+  reading: z.object({ finished: z.boolean().optional(), readTo: z.string().optional(), slips: z.string().optional() }).optional(),
   wordCount: z.number(),
   fillers: z.object({ total: z.number(), top: z.array(z.object({ word: z.string(), count: z.number() })) }),
   scores: z.object({
@@ -198,7 +266,15 @@ const analysisSchema = z.object({
     .optional(),
 });
 
-function systemInstruction(): string {
+const TRANSCRIPT_RULE: Record<TranscriptMode, string> = {
+  verbatim: "- The transcript must be verbatim and include fillers so they can be counted. Count fillers precisely.",
+  "read-aloud":
+    '- This is a read-aloud drill and the passage is given to you. Never write the passage out: leave "transcript" empty, fill "reading" instead, and quote at most five consecutive words of the passage anywhere in your answer. Count fillers precisely.',
+  "no-recite":
+    "- The transcript is verbatim for the speaker's own words, fillers included, so they can be counted. Where the speaker recites published text (a famous speech, a poem, a book passage, lyrics, scripture), do not write those words out: replace the whole stretch with one bracketed description such as [recites the opening of a famous speech, about 40 words]. Never quote more than five consecutive words of published text anywhere in your answer. Count fillers precisely.",
+};
+
+function systemInstruction(mode: TranscriptMode): string {
   return `You are Vero, the coach inside Verve — a daily communication-training app. You are a world-class public speaking, storytelling and voice coach in the tradition of Vinh Giang, Matt Abrahams, Yasir Khan and Nancy Duarte. You watch a user's practice recording and coach them. You also know their recent history.
 
 Coaching principles:
@@ -230,11 +306,11 @@ Silence rule (absolute): if you cannot hear intelligible speech from the speaker
 Output rules:
 - observations: 3–6 items, tags ONLY from the catalog provided, each with severity 1–3, incident true/false, and ≤ 12 words of evidence.
 - topFix.skillId and nextFocusSkillId MUST be ids from the skill list. Prefer the skill that fixes the strongest recurring tag.
-- The transcript must be verbatim and include fillers so they can be counted. Count fillers precisely.
+${TRANSCRIPT_RULE[mode]}
 - Do not mention that you are an AI. Speak as Vero.`;
 }
 
-function userPrompt(ctx: AnalyzeContext): string {
+function userPrompt(ctx: AnalyzeContext, mode: TranscriptMode, passage?: Passage): string {
   const drill = DRILL_MAP[ctx.drillId];
   const fw = ctx.frameworkId ? FRAMEWORK_MAP[ctx.frameworkId] : undefined;
   const focus = ctx.focusSkillId ? SKILL_MAP[ctx.focusSkillId] : undefined;
@@ -245,6 +321,17 @@ function userPrompt(ctx: AnalyzeContext): string {
   lines.push(`Evaluate most: ${drill?.evalFocus.join(", ") ?? "overall delivery"}.`);
   if (ctx.prompt) lines.push(`Prompt / topic: "${ctx.prompt}"`);
   if (ctx.promptExtra?.length) lines.push(`Sub-prompts in order: ${ctx.promptExtra.map((p, i) => `${i + 1}) ${p}`).join(" ")}`);
+  if (mode === "read-aloud" && passage) {
+    const n = passage.text.split(/\s+/).filter(Boolean).length;
+    lines.push(`READ-ALOUD DRILL. The speaker is reading this passage from the screen: "${passage.title}" (${passage.source}), ${n} words:`);
+    lines.push(`"""${passage.text}"""`);
+    lines.push(
+      `The words are not the speaker's own, so do not judge or comment on the wording, the content or how it is organised. Judge the delivery: which word they stressed in each sentence, pauses at the punctuation, pace, vocal variety, eyes on the lens.`,
+    );
+    lines.push(
+      `Do not write the passage out. Set "transcript" to "". In "reading": finished = did they reach the final word; readTo = the last four words of the passage they actually said; slips = what differed from the page, with timestamps. Set wordCount to the number of words they actually spoke.`,
+    );
+  }
   if (fw) lines.push(`Framework required: ${fw.name} — ${fw.steps.map((s) => s.label).join(" → ")}. Report adherence in "framework".`);
   if (focus) {
     const on = ctx.history?.focus?.skillId === focus.id ? ` (session ${(ctx.history?.focus?.sessions ?? 0) + 1} on this focus)` : "";
@@ -284,6 +371,9 @@ function userPrompt(ctx: AnalyzeContext): string {
   }
   lines.push(`Observation tag catalog (tag: when to use): ${OBSERVATION_TAGS.map((t) => `${t.tag}: ${t.hint}`).join("; ")}.`);
   lines.push(`Skill ids you may reference: ${skillList}.`);
+  if (mode === "no-recite") {
+    lines.push(`An earlier attempt at this review was blocked for reproducing published text. Follow the transcript rule exactly: describe recited text in brackets, never type it out.`);
+  }
   lines.push(`Return JSON only, matching the schema. Respect every word limit.`);
   return lines.join("\n");
 }
@@ -350,7 +440,11 @@ async function detectSpeech(ai: GoogleGenAI, filePart: Part, model: string): Pro
   return parsed;
 }
 
+/** No new review attempt starts after this long: the route has 300 s in total. */
+const RETRY_BUDGET_MS = 180_000;
+
 export async function analyzeMedia(bytes: Buffer | Uint8Array, mimeType: string, ctx: AnalyzeContext, apiKey?: string): Promise<VeroAnalysis> {
+  const startedAt = Date.now();
   const ai = new GoogleGenAI({ apiKey: apiKey ?? env("GEMINI_API_KEY") });
   const primary = optionalEnv("GEMINI_MODEL") ?? "gemini-3.8-flash";
   const fallback = "gemini-2.5-flash";
@@ -372,37 +466,75 @@ export async function analyzeMedia(bytes: Buffer | Uint8Array, mimeType: string,
     }
   }
 
-  const contents = createUserContent([filePart, userPrompt(ctx)]);
-  const run = async (model: string) => {
+  const passage = DRILL_MAP[ctx.drillId]?.material.kind === "passage" ? findPassage(ctx.passageId, ctx.prompt) : undefined;
+
+  type Outcome = { ok: true; parsed: z.infer<typeof analysisSchema>; model: string; mode: TranscriptMode } | { ok: false; reason: "recitation" | "empty"; detail: string };
+  const review = async (model: string, mode: TranscriptMode): Promise<Outcome> => {
     const res = await ai.models.generateContent({
       model,
-      contents,
+      contents: createUserContent([filePart, userPrompt(ctx, mode, passage)]),
       config: {
-        systemInstruction: systemInstruction(),
+        systemInstruction: systemInstruction(mode),
         responseMimeType: "application/json",
-        responseSchema: RESPONSE_SCHEMA,
+        responseSchema: responseSchema(mode),
         temperature: 0.4,
       },
     });
     const text = res.text ?? "";
-    return { text, model };
+    const finish = String(res.candidates?.[0]?.finishReason ?? "none");
+    const detail = `model=${model} mode=${mode} finish=${finish} block=${res.promptFeedback?.blockReason ?? "none"} chars=${text.length}`;
+    console.log(`[gemini] review ${detail} thoughts=${res.usageMetadata?.thoughtsTokenCount ?? 0} out=${res.usageMetadata?.candidatesTokenCount ?? 0}`);
+    if (finish === "RECITATION") return { ok: false, reason: "recitation", detail };
+    try {
+      return { ok: true, parsed: analysisSchema.parse(JSON.parse(stripFences(text))), model, mode };
+    } catch {
+      // Empty body, output cut off mid-object, or a shape the schema refuses: all unusable, none worth showing raw.
+      return { ok: false, reason: "empty", detail };
+    }
   };
 
-  let out: { text: string; model: string };
+  // At most three calls. A recitation block on a verbatim transcript is retried without the recited text;
+  // anything else unusable (and any API error) gets one go on the fallback model.
+  let done: Extract<Outcome, { ok: true }> | null = null;
+  let failed: Extract<Outcome, { ok: false }> | null = null;
   try {
-    out = await run(primary);
-  } catch (e) {
-    console.error(`[gemini] ${primary} failed, falling back`, e);
-    out = await run(fallback);
+    let next: { model: string; mode: TranscriptMode } | null = { model: primary, mode: passage ? "read-aloud" : "verbatim" };
+    for (let n = 0; next && n < 3; n++) {
+      if (n > 0 && Date.now() - startedAt > RETRY_BUDGET_MS) break;
+      const cur: { model: string; mode: TranscriptMode } = next;
+      next = null;
+      let r: Outcome;
+      try {
+        r = await review(cur.model, cur.mode);
+      } catch (e) {
+        if (cur.model === fallback) throw e;
+        console.error(`[gemini] ${cur.model} failed, falling back`, e);
+        next = { model: fallback, mode: cur.mode };
+        continue;
+      }
+      if (r.ok) {
+        done = r;
+        break;
+      }
+      failed = r;
+      if (r.reason === "recitation" && cur.mode === "verbatim") next = { model: cur.model, mode: "no-recite" };
+      else if (cur.model !== fallback) next = { model: fallback, mode: cur.mode };
+    }
   } finally {
     ai.files.delete({ name: uploaded.name }).catch(() => {});
   }
+  if (!done) throw new ReviewError(failed?.reason ?? "empty", failed?.detail ?? "no attempt completed");
 
-  const parsed = analysisSchema.parse(JSON.parse(stripFences(out.text)));
+  const { parsed, mode } = done;
+  const out = { model: done.model };
   const minutes = Math.max(0.25, ctx.durationSec / 60);
-  const wordCount = parsed.wordCount || parsed.transcript.split(/\s+/).filter(Boolean).length;
+  const typedWords = parsed.transcript.trim().split(/\s+/).filter(Boolean).length;
+  const asRead = mode === "read-aloud" && passage ? passageAsRead(passage.text, parsed.reading, parsed.wordCount || 0) : null;
+  // Words actually spoken. Only a verbatim transcript can be counted; otherwise Vero's own count stands in.
+  const spokenWords = mode === "verbatim" ? typedWords : asRead ? parsed.wordCount || asRead.words : Math.max(parsed.wordCount || 0, typedWords);
+  const wordCount = mode === "verbatim" ? parsed.wordCount || typedWords : spokenWords;
   // A silent tape must never become feedback.
-  if (parsed.noSpeech || (ctx.durationSec >= 15 && parsed.transcript.trim().split(/\s+/).filter(Boolean).length < 5)) throw new NoSpeechError();
+  if (parsed.noSpeech || (ctx.durationSec >= 15 && spokenWords < 5)) throw new NoSpeechError();
   const fillersTotal = parsed.fillers.total;
   const clamp10 = (n: number) => Math.max(1, Math.min(10, Math.round(n * 10) / 10));
 
@@ -479,7 +611,9 @@ export async function analyzeMedia(bytes: Buffer | Uint8Array, mimeType: string,
 
   return {
     rubric,
-    transcript: parsed.transcript.trim(),
+    transcript: asRead ? asRead.text : parsed.transcript.trim(),
+    transcriptKind: asRead ? "passage" : mode === "no-recite" ? "summarized" : undefined,
+    slips: asRead ? trimWords(parsed.reading?.slips ?? "", 60) || undefined : undefined,
     wordCount,
     wpm: Math.round(wordCount / minutes),
     fillers: {

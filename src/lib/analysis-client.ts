@@ -69,6 +69,7 @@ export async function analyzeSession(opts: {
         kind: session.kind,
         prompt: session.prompt,
         promptExtra: session.promptExtra,
+        passageId: session.passageId,
         focusSkillId: session.focusSkillId,
         frameworkId: session.frameworkId,
         durationSec: session.recording.durationSec,
@@ -118,6 +119,15 @@ export async function analyzeSession(opts: {
       } else if (j?.error === "key_invalid") {
         msg = "Your Gemini API key was rejected. Update it in Settings.";
         code = "key_invalid";
+      } else if (j?.error === "quota") {
+        msg = "This Gemini key is out of credits or over its limit. Top up in Google AI Studio, or switch keys in Settings, then retry.";
+        code = "quota";
+      } else if (j?.error === "review_blocked") {
+        msg = "Gemini refused to write this review because the take repeats published text word for word. Retry once. If it happens again, redo the drill.";
+        code = "review_blocked";
+      } else if (j?.error === "review_empty") {
+        msg = "Vero's review came back empty. Retry.";
+        code = "review_empty";
       } else if (j?.message) msg = j.message;
       else if (j?.error) msg = j.error;
     } catch {}
